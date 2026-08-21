@@ -2,13 +2,13 @@
 
 ![](docs/banner.png)
 
-A lossy image codec built to win on **several axes at once** — not just compression ratio. This is **v1**: the format is frozen, and the numbers below are what froze it.
+A lossy image codec built to win on **several axes at once** — not just compression ratio. This is **v1.1**: the format is frozen, and the numbers below are what froze it.
 
 [한국어](README.ko.md)
 
 Most codecs trade one property for another. ingot picks the axes that were left empty because nobody optimized for them, and locks them into the format itself.
 
-- **Ahead of JPEG, WebP, and JPEG XL on PSNR** — BD-rate **−25.7%**, **−9.1%**, and **−3.3%** on standard photos. On a perceptual metric it is a different story, reported below rather than hidden.
+- **Ahead of JPEG on all three metrics** — BD-rate **−23.3%** (PSNR), **−21.1%** (SSIM), **−11.3%** (SSIMULACRA2) on standard photos. Ahead of WebP on PSNR by **−4.4%**, level with JPEG XL.
 - **Bit-exact** — integer math only, zero floating-point operations in the library. The same input always produces the same bytes.
 - **Thread count never enters the bitstream** — splitting an image into 16× more parallel groups costs **1.4%**. Tiling in existing standards costs 3.7–8%.
 - **Small** — about 1,900 lines of C99 in `src/`, decoder path 880. No dependencies beyond libc.
@@ -34,29 +34,29 @@ Input and output are PPM (P6, 8-bit) only. Convert other formats with ffmpeg.
 
 8 images from the AOM common test set, 6 quality steps, one machine, 2026-08-21. BD-rate uses monotone (PCHIP) interpolation. **Negative means ingot spends fewer bits at equal quality.**
 
-| vs | PSNR | SSIM | VMAF |
+| vs | PSNR | SSIM | SSIMULACRA2 |
 |---|---|---|---|
-| JPEG | **−25.7%** | **−21.0%** | **−3.2%** |
-| WebP | **−9.1%** | +2.2% | +33.9% |
-| JPEG XL | **−3.3%** | +19.4% | +42.4% |
-| AVIF | +68.4% | +74.7% | +72.6% |
+| JPEG | **−23.3%** | **−21.1%** | **−11.3%** |
+| WebP | **−4.4%** | +5.4% | +1.3% |
+| JPEG XL | +0.1% | +19.0% | +34.0% |
+| AVIF | +70.6% | +70.5% | +43.5% |
 
-**Read the third column before believing the first.** ingot was tuned against squared error, so it wins on PSNR and loses on a perceptual metric. Against WebP the same codec is 9% ahead by PSNR and 34% behind by VMAF. That gap is the honest description of where this codec is, and closing it is the next piece of work — not a footnote.
+**The third column is why v1.1 exists.** Up to v1.0 this codec was tuned against squared error alone. Adding a perceptual metric showed that at the old setting it lost to *JPEG* on SSIMULACRA2 (+5.6%) while appearing to beat WebP and JPEG XL on PSNR. One spec constant — how much coarser high-frequency coefficients are quantized — moved it from +5.6% to **−11.3%** against JPEG, at the cost of 2.4 points of PSNR. v1.1 takes that trade.
 
-VMAF is used because SSIMULACRA2 ships no binary and building it pulls in all of libjxl. VMAF was trained on video, not stills, so it is a third axis rather than a replacement for the other two.
+SSIMULACRA2 is a perceptual metric designed for still images; the Python implementation is used here because upstream ships no binary. It is slow (about two seconds per image), which is why the harness reports all three metrics rather than replacing the other two.
 
 ### On our own material
 
 12 images we actually produce — AI-generated images, UI screenshots, and game sprites, 4 each:
 
-| vs | PSNR | SSIM | VMAF |
+| vs | PSNR | SSIM | SSIMULACRA2 |
 |---|---|---|---|
-| JPEG | **−39.9%** | **−27.7%** | **−39.1%** |
-| WebP | **−15.8%** | +4.9% (n=11) | +28.8% |
-| JPEG XL | **−23.5%** | **−2.7%** | +8.4% |
-| AVIF | +102.5% | +124.3% | +92.8% |
+| JPEG | **−35.2%** | **−26.9%** | **−26.9%** |
+| WebP | **−8.5%** | **−3.4%** | +4.7% |
+| JPEG XL | **−17.6%** | **−0.9%** | +40.6% |
+| AVIF | +115.6% | +127.1% | +82.5% |
 
-On this material ingot beats JPEG on all three metrics and JPEG XL on two of three.
+On this material ingot beats JPEG on all three metrics, and WebP and JPEG XL on two of three.
 
 ### The other axes
 
@@ -69,7 +69,7 @@ On this material ingot beats JPEG on all three metrics and JPEG XL on two of thr
 | Decode speed | **competitive** | 0.096 s vs JPEG 0.065, WebP 0.076, JXL 0.088, AVIF 0.100 (6 images, process startup included) |
 | Encode speed | **behind** | 1.16 s vs JPEG 0.081, WebP 0.155, JXL 0.190. Faster than AVIF (6.49 s) |
 
-Chroma subsampling (4:2:0) is off by default and measures as a loss on standard photos (PSNR +1.4% vs −3.3% against JXL). It costs **8.5 dB on screenshots**, so never turn it on for text or UI.
+Chroma subsampling (4:2:0) is off by default and measures as a loss on standard photos (PSNR +1.4% vs +0.1% against JXL). It costs **8.5 dB on screenshots**, so never turn it on for text or UI.
 
 ## What is in the format, and what it was worth
 
@@ -86,6 +86,7 @@ Each change was added one at a time and kept only if it measured better. Reverte
 | Per-size context for the block header | −24.2% → **−24.6%** | −19.7% → **−20.1%** |
 | Split early-exit in the encoder | −24.6% → **−25.6%**, and 1.6× faster | −20.1% → **−21.0%** |
 | Per-size context for coefficients | −25.6% → **−25.7%** | unchanged |
+| High-frequency quantization weight (v1.1) | −25.7% → −23.3% | SSIMULACRA2 **+5.6% → −11.3%** |
 | Run-length of zero coefficients | **+6.2% (reverted)** | **+6.6% (reverted)** |
 | 32×32 blocks | **+13.2% (reverted)** | |
 | More intra modes — tried three times | **+0.7 to +0.9%p (reverted)** | |
@@ -101,7 +102,7 @@ The full log, with the reason for each revert, is in [SPEC.md](SPEC.md).
 ## Design rules
 
 1. The spec is edited before the code, never after.
-2. Every change is measured on a fixed test set with three metrics before it is kept.
+2. Every change is measured on a fixed test set with three metrics — PSNR, SSIM, SSIMULACRA2 — before it is kept.
 3. Reserved bits mean *reject if set*, so old decoders never guess at new files.
 4. The decoder returns error codes. It does not abort, and it does not read past the buffer.
 
