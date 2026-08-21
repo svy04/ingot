@@ -10,8 +10,8 @@ Most codecs trade one property for another. ingot picks the axes that were left 
 
 - **Ahead of JPEG on all three metrics** — BD-rate **−23.3%** (PSNR), **−21.1%** (SSIM), **−11.3%** (SSIMULACRA2) on standard photos. Ahead of WebP on PSNR by **−4.4%**, level with JPEG XL.
 - **Bit-exact** — integer math only, zero floating-point operations in the library. The same input always produces the same bytes.
-- **Thread count never enters the bitstream** — splitting an image into 16× more parallel groups costs **1.4%**. Tiling in existing standards costs 3.7–8%.
-- **Small** — about 1,900 lines of C99 in `src/`, decoder path 880. No dependencies beyond libc.
+- **Thread count never enters the bitstream** — any number of threads, identical bytes out. The price is real and grows as groups shrink: **2.7%** at the default 256, **29.7%** at 64, measured against one group per image (6 images, 6 quality steps). Tiling in existing standards costs 3.7–8%, so this is ahead only near the default.
+- **Small** — 2,030 lines of C99 in `src/`, of which 1,303 are on the decode path. No dependencies beyond libc.
 - **Hostile input is expected** — the decoder returns error codes, never crashes. 300 corrupted files, 0 abnormal exits.
 
 ```console
@@ -43,6 +43,8 @@ Input and output are PPM (P6, 8-bit) only. Convert other formats with ffmpeg.
 
 **The third column is why v1.1 exists.** Up to v1.0 this codec was tuned against squared error alone. Adding a perceptual metric showed that at the old setting it lost to *JPEG* on SSIMULACRA2 (+5.6%) while appearing to beat WebP and JPEG XL on PSNR. One spec constant — how much coarser high-frequency coefficients are quantized — moved it from +5.6% to **−11.3%** against JPEG, at the cost of 2.4 points of PSNR. v1.1 takes that trade.
 
+**Two things about the comparison setup, in our disfavour and in theirs.** libwebp has no lossy 4:4:4 mode — it only accepts `yuv420p` — while ingot, JPEG, and AVIF are all measured at 4:4:4 here. So the WebP column understates WebP on material where colour detail matters; the honest reading of our WebP result is not "we compress better" but "WebP cannot enter this comparison at full colour." In the other direction, AVIF is called at `cpu-used 6`, a fast preset that costs libaom real compression. Our AVIF gap is therefore *smaller* than the one printed above, not larger.
+
 SSIMULACRA2 is a perceptual metric designed for still images; the Python implementation is used here because upstream ships no binary. It is slow (about two seconds per image), which is why the harness reports all three metrics rather than replacing the other two.
 
 ### On our own material
@@ -63,10 +65,10 @@ On this material ingot beats JPEG on all three metrics, and WebP and JPEG XL on 
 | Axis | Status | Evidence |
 |---|---|---|
 | Determinism | **done** | Encoding twice gives identical bytes. 0 float ops in `src/` |
-| Parallelism | **in the format; wall clock unmeasured** | Group size 64 → 1024 changes file size by 1.4%. The encoder writes each group into its own slot, so an OpenMP build parallelizes it — this machine has no OpenMP runtime |
-| Simplicity | **budgeted** | Decoder path 880 lines, 0 external deps, spec under 12 pages |
+| Parallelism | **in the format; the price is larger than first measured** | Against one group per image: 256 (default) **+2.7%**, 128 +9.8%, 64 **+29.7%** BD-rate. The 1.4% printed here until 2026-08-22 was measured before arithmetic coding, which resets the probability tables at every group boundary — small groups now have too few symbols to learn from. The encoder writes each group into its own slot, so an OpenMP build parallelizes it; this machine has no OpenMP runtime |
+| Simplicity | **budgeted, never benchmarked against anyone** | Decode path 1,303 lines, 2,030 total, 0 external deps, spec under 12 pages. No competitor has been measured on this axis |
 | Patent freedom | expired art only | DCT (1974), Golomb (1966), arithmetic coding (late 1970s). **No legal review yet** |
-| Decode speed | **competitive** | 0.096 s vs JPEG 0.065, WebP 0.076, JXL 0.088, AVIF 0.100 (6 images, process startup included) |
+| Decode speed | **slowest of the five** | Wall clock 0.096 s vs JPEG 0.065, WebP 0.076, JXL 0.088, AVIF 0.100 — but process startup alone is 0.059 s for ffmpeg and 0.028 s for our CLI. Subtract it and the actual decode is 0.068 s vs JPEG 0.006, WebP 0.017, JXL 0.029, AVIF 0.041. We are last, by 11× against JPEG |
 | Encode speed | **behind** | 1.16 s vs JPEG 0.081, WebP 0.155, JXL 0.190. Faster than AVIF (6.49 s) |
 
 Chroma subsampling (4:2:0) is off by default and measures as a loss on standard photos (PSNR +1.4% vs +0.1% against JXL). It costs **8.5 dB on screenshots**, so never turn it on for text or UI.
