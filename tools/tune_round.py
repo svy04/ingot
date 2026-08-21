@@ -1,19 +1,22 @@
 # -*- coding: utf-8 -*-
-"""양자화 반올림 자리(데드존)를 값마다 재서 고른다.
+"""인코더 매개변수 하나를 값마다 재서 고른다.
 
 인코더만의 선택이라 규격이 바뀌지 않는다. 그래서 값을 골라도 옛 파일이 그대로 읽힌다.
 """
 import subprocess, sys, os, re
 
-CANDS = [6, 5]
+CANDS = [0, 8, 16, 24]
 SRC = ("src/transform.c src/color.c src/predict.c src/bitio.c "
        "src/rangecoder.c src/encode.c src/decode.c tools/cli.c")
+
+
+NAME = os.environ.get("TUNE", "INGOT_QROUND")
 
 
 def build(val):
     if os.path.exists("ingot.exe"):
         os.remove("ingot.exe")
-    cmd = ("gcc -std=c99 -O2 -DINGOT_QROUND=%d -w " % val) + SRC + " -o ingot -lm"
+    cmd = ("gcc -std=c99 -O2 -D%s=%d -w " % (NAME, val)) + SRC + " -o ingot -lm"
     r = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT)
     if r.returncode:
@@ -43,7 +46,7 @@ def main():
     for v in CANDS:
         build(v)
         g = measure(images)
-        print("반올림 %2d/16 | jpeg  P %+6.2f%%  S %+6.2f%%  |  webp  P %+6.2f%%  S %+6.2f%%"
+        print(NAME + " %2d | jpeg  P %+6.2f%%  S %+6.2f%%  |  webp  P %+6.2f%%  S %+6.2f%%"
               % (v, g.get("psnr:jpeg", 0), g.get("ssim:jpeg", 0),
                  g.get("psnr:webp", 0), g.get("ssim:webp", 0)))
         sys.stdout.flush()
