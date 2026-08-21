@@ -51,7 +51,8 @@ def ppm_pixels(path):
 def quality_of(ref, test):
     out = {}
     for filt, key, pat in (("psnr", "psnr", r"average:([0-9.]+)"),
-                           ("ssim", "ssim", r"All:([0-9.]+)")):
+                           ("ssim", "ssim", r"All:([0-9.]+)"),
+                           ("libvmaf", "vmaf", r"VMAF score: ([0-9.]+)")):
         r, _ = sh(["ffmpeg", "-v", "info", "-i", test, "-i", ref,
                    "-lavfi", filt, "-f", "null", "-"])
         m = re.search(pat, r.stdout + r.stderr)
@@ -77,7 +78,7 @@ def measure_ours(images, tmp, sub=0):
                 "image": os.path.basename(src), "codec": "ingot", "setting": q,
                 "bytes": os.path.getsize(enc), "pixels": n,
                 "bpp": 8.0 * os.path.getsize(enc) / n,
-                "psnr": m["psnr"], "ssim": m["ssim"],
+                "psnr": m["psnr"], "ssim": m["ssim"], "vmaf": m.get("vmaf"),
                 "enc_s": round(et, 3), "dec_s": round(dt, 3),
             })
     return rows
@@ -117,7 +118,7 @@ def measure_external(images, tmp):
                     "image": os.path.basename(src), "codec": name, "setting": q,
                     "bytes": os.path.getsize(enc), "pixels": n,
                     "bpp": 8.0 * os.path.getsize(enc) / n,
-                    "psnr": m["psnr"], "ssim": m["ssim"],
+                    "psnr": m["psnr"], "ssim": m["ssim"], "vmaf": m.get("vmaf"),
                     "enc_s": round(et, 3), "dec_s": round(dt, 3),
                 })
     return rows
@@ -228,13 +229,27 @@ def ssim_db(v):
     return -10.0 * math.log10(max(1e-9, 1.0 - v))
 
 
+def vmaf_db(v):
+    """VMAF 는 0~100 이고 100 에 붙으면 곡선이 눕는다. SSIM 과 같은 식으로 편다."""
+    if v is None:
+        return None
+    if v >= 100.0:
+        v = 99.999
+    return -10.0 * math.log10(max(1e-9, 1.0 - v / 100.0))
+
+
 def curves(rows, codec, metric="psnr"):
-    """이미지별 (bpp, 화질) 곡선. metric 은 psnr 또는 ssim."""
+    """이미지별 (bpp, 화질) 곡선. metric 은 psnr, ssim, vmaf 중 하나."""
     out = {}
     for r in rows:
         if r["codec"] != codec:
             continue
-        q = r["psnr"] if metric == "psnr" else ssim_db(r["ssim"])
+        if metric == "psnr":
+            q = r["psnr"]
+        elif metric == "ssim":
+            q = ssim_db(r["ssim"])
+        else:
+            q = vmaf_db(r.get("vmaf"))
         if q is None:
             continue
         out.setdefault(r["image"], []).append((r["bpp"], q))
@@ -298,7 +313,7 @@ def main():
         if not os.path.exists(path):
             print("\n비교 대상 없음: %s" % path); return 0
         old = json.load(open(path, encoding="utf-8"))
-        for metric in ("psnr", "ssim"):
+        for metric in ("psnr", "ssim", "vmaf"):
             oc = curves(old, "ingot", metric)
             nc = curves(rows, "ingot", metric)
             deltas, skipped = [], 0
@@ -314,7 +329,7 @@ def main():
                       % (metric.upper(), sum(deltas) / len(deltas), len(deltas), note))
 
     if "--all" in args:
-        for metric in ("psnr", "ssim"):
+        for metric in ("psnr", "ssim", "vmaf"):
             base = curves(rows, "ingot", metric)
             print("\n기존 포맷 대비, %s 기준 (양수 = 우리가 더 많은 비트를 쓴다)"
                   % metric.upper())

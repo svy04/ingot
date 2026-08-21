@@ -35,6 +35,8 @@ def measure(images):
             which = "psnr"
         elif "SSIM 기준" in line:
             which = "ssim"
+        elif "VMAF 기준" in line:
+            which = "vmaf"
         m = re.match(r"\s+vs (\w+)\s+([-+][\d.]+)%", line)
         if m and which:
             got[which + ":" + m.group(1)] = float(m.group(2))
@@ -46,9 +48,9 @@ def main():
     for v in CANDS:
         build(v)
         g = measure(images)
-        print(NAME + " %2d | jpeg  P %+6.2f%%  S %+6.2f%%  |  webp  P %+6.2f%%  S %+6.2f%%"
-              % (v, g.get("psnr:jpeg", 0), g.get("ssim:jpeg", 0),
-                 g.get("psnr:webp", 0), g.get("ssim:webp", 0)))
+        print(NAME + " %3d | jpeg P %+6.2f S %+6.2f V %+6.2f | webp P %+6.2f S %+6.2f V %+6.2f"
+              % (v, g.get("psnr:jpeg", 0), g.get("ssim:jpeg", 0), g.get("vmaf:jpeg", 0),
+                 g.get("psnr:webp", 0), g.get("ssim:webp", 0), g.get("vmaf:webp", 0)))
         sys.stdout.flush()
 
 
