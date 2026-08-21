@@ -156,7 +156,14 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 #endif
 
 /* 계수 무리 = 크기 x 대역 4 x 이웃 3 x 평면 2, 거기에 last 6 */
-#define INGOT_CTX_BASE  ((INGOT_CTX_BYSIZE == 2) ? 72 : (INGOT_CTX_BYSIZE == 1) ? 48 : 24)
+/* 이웃 크기 합을 몇 단계로 나눌지. 1차원 이웃이던 때는 셋이 맞았는데,
+ * 2차원으로 바꾸면서 합의 범위가 세 배로 늘었으므로 다시 잰다. */
+#ifndef INGOT_NBLEV
+#define INGOT_NBLEV 5
+#endif
+
+#define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 3 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
+#define INGOT_CTX_BASE  (INGOT_CTX_SIZES * 4 * INGOT_NBLEV * 2)
 #define INGOT_CTX_COUNT (INGOT_CTX_BASE + 6)
 #define INGOT_RICE_MAX  20
 #define INGOT_ESCAPE_Q  24
@@ -191,11 +198,30 @@ static inline int ingot_nb2d(const int16_t *lvl, int idx, int n)
     return s;
 }
 
-static inline int ingot_ctx_level(int prev_sum)
+static inline int ingot_ctx_level(int nb)
 {
-    /* 다섯 단계로 나눠 봤더니 오히려 나빠졌다 (2026-08-21). 무리가 늘면
-     * 무리마다 들어오는 표본이 줄어 확률이 늦게 자리를 잡는다. 셋이 맞다. */
-    return (prev_sum == 0) ? 0 : (prev_sum <= 2) ? 1 : 2;
+#if INGOT_NBLEV >= 7
+    if (nb == 0) return 0;
+    if (nb <= 1) return 1;
+    if (nb <= 2) return 2;
+    if (nb <= 4) return 3;
+    if (nb <= 7) return 4;
+    if (nb <= 12) return 5;
+    return 6;
+#elif INGOT_NBLEV >= 5
+    if (nb == 0) return 0;
+    if (nb <= 1) return 1;
+    if (nb <= 3) return 2;
+    if (nb <= 7) return 3;
+    return 4;
+#elif INGOT_NBLEV == 4
+    if (nb == 0) return 0;
+    if (nb <= 1) return 1;
+    if (nb <= 4) return 2;
+    return 3;
+#else
+    return (nb == 0) ? 0 : (nb <= 2) ? 1 : 2;
+#endif
 }
 
 static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
@@ -207,13 +233,13 @@ static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
      * 다르다. last 를 크기별로 가른 것이 크게 먹혔으므로 여기도 가른다. */
 #if INGOT_CTX_BYSIZE == 2
     int sz = (n == 4) ? 0 : (n == 8) ? 1 : 2;
-    return ((sz * 4 + band) * 3 + lvl) + (plane ? 36 : 0);
+    return ((sz * 4 + band) * INGOT_NBLEV + lvl) + (plane ? (INGOT_CTX_BASE / 2) : 0);
 #else
     int sz = (n == 16) ? 1 : 0;
-    return ((sz * 4 + band) * 3 + lvl) + (plane ? 24 : 0);
+    return ((sz * 4 + band) * INGOT_NBLEV + lvl) + (plane ? (INGOT_CTX_BASE / 2) : 0);
 #endif
 #else
-    return (band * 3 + lvl) + (plane ? 12 : 0);
+    return (band * INGOT_NBLEV + lvl) + (plane ? (INGOT_CTX_BASE / 2) : 0);
 #endif
 }
 
