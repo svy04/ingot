@@ -124,7 +124,12 @@ void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n)
 
 void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n)
 {
-    int32_t tmp[256];
+    /* 64비트로 모은다. 계수가 규격 상한(±32767)까지 찬 16x16 을 역변환하면
+     * 둘째 단계 누산이 32비트 한계의 31.6 배까지 간다. 정상 이미지에서는
+     * 안 닿지만 손상된 파일이 그 값을 실을 수 있고, 32비트로 두면 그때
+     * 동작이 컴파일러 재량이 된다 — "어떤 바이트열에도 안 죽는다"는 약속이
+     * 거기서 깨진다 (2026-08-22). 순변환은 입력이 잔차(±255)라 안전하다. */
+    int64_t tmp[256];
     const int16_t *M = dct_of(n);
     int shift = (n == 4) ? INGOT_INV_SHIFT4
               : (n == 8) ? INGOT_INV_SHIFT8 : INGOT_INV_SHIFT16;
@@ -132,18 +137,18 @@ void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n)
 
     for (u = 0; u < n; u++) {
         for (y = 0; y < n; y++) {
-            int32_t s = 0;
+            int64_t s = 0;
             for (v = 0; v < n; v++)
-                s += (int32_t)M[v * n + y] * src[v * n + u];
+                s += (int64_t)M[v * n + y] * src[v * n + u];
             tmp[y * n + u] = s;
         }
     }
     for (y = 0; y < n; y++) {
         int16_t *row = dst + (size_t)y * stride;
         for (x = 0; x < n; x++) {
-            int32_t s = 0;
+            int64_t s = 0;
             for (u = 0; u < n; u++)
-                s += (int32_t)M[u * n + x] * tmp[y * n + u];
+                s += (int64_t)M[u * n + x] * tmp[y * n + u];
             s = (s + (1 << (shift - 1))) >> shift;
             if (s >  32767) s =  32767;
             if (s < -32768) s = -32768;
