@@ -129,7 +129,7 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 /* ---- 적응형 부호화 무리 ----
  * 자리마다 통계가 다르므로 무리를 나누고 무리마다 라이스 파라미터를 스스로 맞춘다.
  * 인코더와 디코더가 같은 순서로 같은 갱신을 하므로 상태가 어긋나지 않는다. */
-#define INGOT_CTX_COUNT 26   /* 대역 4 x 이웃 3 x 평면 2, 거기에 last 2 */
+#define INGOT_CTX_COUNT 30   /* 대역 4 x 이웃 3 x 평면 2, 거기에 last 6 */
 #define INGOT_RICE_MAX  20
 #define INGOT_ESCAPE_Q  24
 
@@ -165,9 +165,12 @@ static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
 }
 
 /* 블록 머리말(last) 전용 무리. */
-static inline int ingot_ctx_last(int plane)
+/* last 는 블록 크기마다 분포가 아주 다르다. 4x4 는 대개 한둘이고
+ * 16x16 은 수십까지 간다. 그래서 크기별로 무리를 갈라 둔다. */
+static inline int ingot_ctx_last_n(int plane, int n)
 {
-    return 24 + (plane ? 1 : 0);
+    int sz = (n == 4) ? 0 : (n == 8) ? 1 : 2;
+    return 24 + sz * 2 + (plane ? 1 : 0);
 }
 
 static inline int ingot_rice_param(const ingot_ctx *c)

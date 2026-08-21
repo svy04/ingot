@@ -91,7 +91,7 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
         if (level != 0) last = k + 1;
     }
 
-    ingot_rc_put_uint(w, &probs[ingot_prob_of(ingot_ctx_last(plane))], (uint32_t)last);
+    ingot_rc_put_uint(w, &probs[ingot_prob_of(ingot_ctx_last_n(plane, n))], (uint32_t)last);
     for (k = 0; k < last; k++) {
         int p1 = (k >= 1) ? ingot_abs_i(z[k - 1]) : 0;
         int p2 = (k >= 2) ? ingot_abs_i(z[k - 2]) : 0;
