@@ -8,7 +8,7 @@ A lossy image codec built to win on **several axes at once** — not just compre
 
 Most codecs trade one property for another. ingot picks the axes that were left empty because nobody optimized for them, and locks them into the format itself.
 
-- **Ahead of JPEG, WebP, and JPEG XL on PSNR** — BD-rate **−25.6%**, **−9.0%**, and **−3.2%** against them on standard photos. AVIF is still ahead of us by 75%.
+- **Ahead of JPEG, WebP, and JPEG XL on PSNR** — BD-rate **−25.7%**, **−9.1%**, and **−3.3%** against them on standard photos. AVIF is still ahead of us by 75%.
 - **Bit-exact** — integer math only, zero floating-point operations in the library. The same input always produces the same bytes.
 - **Thread count never enters the bitstream** — splitting an image into 16× more parallel groups costs **1.4%**. Tiling in existing standards costs 3.7–8%.
 - **Small** — about 1,900 lines of C99 in `src/`, decoder path 880. No dependencies beyond libc.
@@ -36,7 +36,7 @@ Numbers are from 8 images of the AOM common test set, 6 quality steps, one machi
 
 | Axis | Status | Evidence |
 |---|---|---|
-| Compression ratio | **past JPEG, WebP, JPEG XL on PSNR** | PSNR — JPEG **−25.6%**, WebP **−9.0%**, JXL **−3.2%**, AVIF +68.6%<br>SSIM — JPEG **−21.0%**, WebP +2.4%, JXL +19.5%, AVIF +74.8% |
+| Compression ratio | **past JPEG, WebP, JPEG XL on PSNR** | PSNR — JPEG **−25.7%**, WebP **−9.1%**, JXL **−3.3%**, AVIF +68.4%<br>SSIM — JPEG **−21.0%**, WebP +2.2%, JXL +19.4%, AVIF +74.7% |
 | Determinism | **done** | Encoding twice gives identical bytes. 0 float ops in `src/` |
 | Parallelism | **done in the format, unmeasured in wall clock** | Group size 64 → 1024 changes file size by 1.4%, quality unchanged. The encoder writes each group into its own slot, so an OpenMP build parallelizes it — not verified here |
 | Simplicity | **budgeted** | Decoder path 880 lines, 0 external deps, spec under 12 pages |
@@ -51,14 +51,14 @@ Measured the same way on 12 images we actually produce — AI-generated images, 
 
 | vs | PSNR BD-rate | SSIM BD-rate |
 |---|---|---|
-| JPEG | **−39.5%** | **−27.2%** |
-| WebP | **−15.5%** | +6.0% (n=11) |
-| JPEG XL | **−23.1%** | **−1.9%** |
-| AVIF | +103.6% | +125.7% |
+| JPEG | **−39.9%** | **−27.7%** |
+| WebP | **−15.8%** | +4.9% (n=11) |
+| JPEG XL | **−23.5%** | **−2.7%** |
+| AVIF | +102.5% | +124.3% |
 
-On this material ingot is ahead of JPEG and JPEG XL on *both* metrics, and ahead of WebP on PSNR. On standard photos it is ahead on PSNR but still behind WebP (+2.4%) and JXL (+19.5%) on SSIM — the two metrics disagree, and that disagreement is reported rather than resolved by picking the flattering one.
+On this material ingot is ahead of JPEG and JPEG XL on *both* metrics, and ahead of WebP on PSNR. On standard photos it is ahead on PSNR but still behind WebP (+2.2%) and JXL (+19.4%) on SSIM — the two metrics disagree, and that disagreement is reported rather than resolved by picking the flattering one.
 
-Chroma subsampling (4:2:0) is off by default. It now measures as a loss on standard photos (PSNR +1.4% vs −3.2% against JXL). It stays as an option, but it costs **8.5 dB on screenshots**, so never turn it on for text or UI.
+Chroma subsampling (4:2:0) is off by default. It now measures as a loss on standard photos (PSNR +1.4% vs −3.3% against JXL). It stays as an option, but it costs **8.5 dB on screenshots**, so never turn it on for text or UI.
 
 ## What is in the format, and what it was worth
 
@@ -72,7 +72,7 @@ Each change was added one at a time and kept only if it measured better. Reverte
 | Neighbor magnitude in the coefficient context | −16.7% → **−17.6%** | −9.9% → **−10.9%** |
 | Quantization dead zone (round at 5/16, not 1/2) | −17.6% → **−25.1%** | −10.9% → **−19.8%** |
 | 4×4 blocks (16 → 8 → 4 recursive split) | −25.1% → −24.2% | +4.4% → **+2.7%** vs WebP |
-| Split early-exit in the encoder | −24.6% → **−25.6%**, and 1.6× faster | −20.1% → **−21.0%** |
+| Split early-exit in the encoder | −24.6% → **−25.7%**, and 1.6× faster | −20.1% → **−21.0%** |
 | Per-size context for the block header | −24.2% → **−24.6%** | −19.7% → **−20.1%** |
 | Run-length of zero coefficients | **+6.2% (reverted)** | **+6.6% (reverted)** |
 | 32×32 blocks | **+13.2% (reverted)** | |
