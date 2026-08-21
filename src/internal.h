@@ -234,7 +234,10 @@ static inline void ingot_ctx_update(ingot_ctx *c, uint32_t k)
 
 /* 무리마다 모델 두 개(0보다 큰가 / 1보다 큰가)를 둔다.
  * 거기에 분할 1개와 모드 3개를 더한다. */
-#define INGOT_PROB_PER_CTX 2
+/* 무리마다 두는 모델 수.
+ *   0..4 : k > 0, k > 1, k > 2, k > 3, k > 4 다섯 깃발
+ *   5..7 : 지수 골롬 접두부. 자리가 깊어질수록 뒤쪽 모델을 쓴다 */
+#define INGOT_PROB_PER_CTX 8
 #define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
 #define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + 2)   /* 16->8 과 8->4, 둘 */
 #define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 3)

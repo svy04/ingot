@@ -212,40 +212,50 @@ uint32_t ingot_rc_dec_bypass(ingot_rc_dec *d, int nbits)
  * 대부분의 계수가 0 이나 ±1 이라 앞의 두 판단에서 대부분이 끝난다.
  * 그 자리에 모델을 붙이는 것이 이 방식의 이득이다.
  */
+/* 깃발을 몇 개까지 둘지. 이 수를 넘는 크기만 지수 골롬으로 넘어간다. */
+#ifndef RC_FLAGS
+#define RC_FLAGS 3
+#endif
+
 void ingot_rc_put_uint(ingot_rc_enc *e, uint16_t *m, uint32_t k)
 {
     uint32_t rest;
-    int b;
+    int b, i;
 
-    ingot_rc_enc_bit(e, &m[0], k > 0);
-    if (k == 0) return;
-    ingot_rc_enc_bit(e, &m[1], k > 1);
-    if (k == 1) return;
+    for (i = 0; i < RC_FLAGS; i++) {
+        ingot_rc_enc_bit(e, &m[i], k > (uint32_t)i);
+        if (k == (uint32_t)i) return;
+    }
 
-    rest = k - 2 + 1;              /* 지수 골롬: n = (k-2)+1 */
+    /* k >= RC_FLAGS. 남은 크기를 지수 골롬으로 담되 접두부에 모델을 붙인다.
+     * 접두부는 "자릿수가 몇인가"라 분포가 쏠려 있어 모델이 값을 하고,
+     * 접미부는 거의 균등하므로 반반으로 둔다. */
+    rest = k - RC_FLAGS + 1;
     b = 0;
     { uint32_t t = rest; while (t) { b++; t >>= 1; } }
-    ingot_rc_enc_bypass(e, 0, b - 1);
-    ingot_rc_enc_bypass(e, rest, b);
+    for (i = 0; i < b - 1; i++)
+        ingot_rc_enc_bit(e, &m[RC_FLAGS + (i < 2 ? i : 2)], 1);
+    ingot_rc_enc_bit(e, &m[RC_FLAGS + ((b - 1) < 2 ? (b - 1) : 2)], 0);
+    if (b > 1) ingot_rc_enc_bypass(e, rest, b - 1);
 }
 
 uint32_t ingot_rc_get_uint(ingot_rc_dec *d, uint16_t *m)
 {
     uint32_t n;
-    int zeros = 0, i;
+    int ones = 0, i;
 
-    if (!ingot_rc_dec_bit(d, &m[0])) return 0;
-    if (!ingot_rc_dec_bit(d, &m[1])) return 1;
+    for (i = 0; i < RC_FLAGS; i++)
+        if (!ingot_rc_dec_bit(d, &m[i])) return (uint32_t)i;
 
-    while (!ingot_rc_dec_bypass(d, 1)) {
-        zeros++;
-        if (d->error || zeros > 31) { d->error = 1; return 0; }
+    while (ingot_rc_dec_bit(d, &m[RC_FLAGS + (ones < 2 ? ones : 2)])) {
+        ones++;
+        if (d->error || ones > 31) { d->error = 1; return 0; }
     }
     n = 1;
-    for (i = 0; i < zeros; i++)
+    for (i = 0; i < ones; i++)
         n = (n << 1) | ingot_rc_dec_bypass(d, 1);
     if (d->error) return 0;
-    return n - 1 + 2;
+    return n - 1 + RC_FLAGS;
 }
 
 void ingot_rc_put_int(ingot_rc_enc *e, uint16_t *m, int v)
