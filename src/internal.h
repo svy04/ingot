@@ -141,7 +141,14 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 /* ---- 적응형 부호화 무리 ----
  * 자리마다 통계가 다르므로 무리를 나누고 무리마다 라이스 파라미터를 스스로 맞춘다.
  * 인코더와 디코더가 같은 순서로 같은 갱신을 하므로 상태가 어긋나지 않는다. */
-#define INGOT_CTX_COUNT 30   /* 대역 4 x 이웃 3 x 평면 2, 거기에 last 6 */
+/* 계수 무리를 블록 크기로도 가를 것인가. 0 이면 크기를 안 본다. */
+#ifndef INGOT_CTX_BYSIZE
+#define INGOT_CTX_BYSIZE 1
+#endif
+
+/* 계수 무리 = 크기 x 대역 4 x 이웃 3 x 평면 2, 거기에 last 6 */
+#define INGOT_CTX_BASE  ((INGOT_CTX_BYSIZE == 2) ? 72 : (INGOT_CTX_BYSIZE == 1) ? 48 : 24)
+#define INGOT_CTX_COUNT (INGOT_CTX_BASE + 6)
 #define INGOT_RICE_MAX  20
 #define INGOT_ESCAPE_Q  24
 
@@ -173,7 +180,19 @@ static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
 {
     int kk = (n == 8) ? k : (k * 64) / (n * n);
     int band = (kk == 0) ? 0 : (kk <= 5) ? 1 : (kk <= 20) ? 2 : 3;
+#if INGOT_CTX_BYSIZE
+    /* 같은 대역이라도 4x4 의 셋째 계수와 16x16 의 마흔째 계수는 분포가
+     * 다르다. last 를 크기별로 가른 것이 크게 먹혔으므로 여기도 가른다. */
+#if INGOT_CTX_BYSIZE == 2
+    int sz = (n == 4) ? 0 : (n == 8) ? 1 : 2;
+    return ((sz * 4 + band) * 3 + lvl) + (plane ? 36 : 0);
+#else
+    int sz = (n == 16) ? 1 : 0;
+    return ((sz * 4 + band) * 3 + lvl) + (plane ? 24 : 0);
+#endif
+#else
     return (band * 3 + lvl) + (plane ? 12 : 0);
+#endif
 }
 
 /* 블록 머리말(last) 전용 무리. */
@@ -182,7 +201,7 @@ static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
 static inline int ingot_ctx_last_n(int plane, int n)
 {
     int sz = (n == 4) ? 0 : (n == 8) ? 1 : 2;
-    return 24 + sz * 2 + (plane ? 1 : 0);
+    return INGOT_CTX_BASE + sz * 2 + (plane ? 1 : 0);
 }
 
 static inline int ingot_rice_param(const ingot_ctx *c)
