@@ -27,6 +27,25 @@ extern const uint8_t ingot_zigzag[64];
 void ingot_fdct8x8(const int16_t *src, int src_stride, int16_t *dst);
 void ingot_idct8x8(const int16_t *src, int16_t *dst, int dst_stride);
 
+/* ---- 인트라 예측 (predict.c) ---- */
+#define INGOT_PRED_DC     0
+#define INGOT_PRED_V      1
+#define INGOT_PRED_H      2
+#define INGOT_PRED_PLANE  3
+#define INGOT_PRED_COUNT  4
+
+typedef struct {
+    int top[8], left[8], topleft;
+    int has_top, has_left, has_topleft;
+} ingot_neighbors;
+
+/* recon 은 지금까지 복원된 평면이다. gx0·gy0 는 조각의 원점이라
+ * 그보다 위·왼쪽은 이웃으로 쓰지 않는다. */
+void ingot_gather_neighbors(const uint8_t *recon, int pw, int ph,
+                            int bx, int by, int gx0, int gy0,
+                            ingot_neighbors *n);
+void ingot_predict(const ingot_neighbors *n, int mode, int16_t *pred);
+
 /* ---- 색 (color.c) ---- */
 void ingot_rgb_to_ycbcr(const uint8_t *rgb, int count,
                      uint8_t *y, uint8_t *cb, uint8_t *cr);
@@ -38,7 +57,9 @@ static inline int ingot_qstep(int quality)
 {
     if (quality < 0) quality = 0;
     if (quality > 63) quality = 63;
-    return 1 + quality * 2;      /* 1 ~ 127 */
+    /* 낮은 비트레이트까지 닿아야 다른 포맷과 같은 구간에서 견줄 수 있다.
+     * 2026-08-21: 1~127 범위로는 곡선이 안 겹쳐 BD-rate 를 절반도 못 쟀다. */
+    return 1 + quality * 2 + (quality * quality) / 16;   /* 1 ~ 375 */
 }
 
 static inline int16_t ingot_quantize(int coef, int step)
@@ -85,7 +106,7 @@ static inline int ingot_qstep_at(int base, int idx, int plane)
 /* ---- 적응형 부호화 무리 ----
  * 자리마다 통계가 다르므로 무리를 나누고 무리마다 라이스 파라미터를 스스로 맞춘다.
  * 인코더와 디코더가 같은 순서로 같은 갱신을 하므로 상태가 어긋나지 않는다. */
-#define INGOT_CTX_COUNT 8
+#define INGOT_CTX_COUNT 10
 #define INGOT_RICE_MAX  20
 #define INGOT_ESCAPE_Q  24
 
@@ -105,6 +126,12 @@ static inline int ingot_ctx_index(int k, int plane)
 {
     int band = (k == 0) ? 0 : (k <= 5) ? 1 : (k <= 20) ? 2 : 3;
     return band + (plane ? 4 : 0);
+}
+
+/* 블록 머리말(last) 전용 무리. */
+static inline int ingot_ctx_last(int plane)
+{
+    return 8 + (plane ? 1 : 0);
 }
 
 static inline int ingot_rice_param(const ingot_ctx *c)

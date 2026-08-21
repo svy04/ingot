@@ -8,9 +8,9 @@ Most codecs trade one property for another. ingot picks the axes that were left 
 
 - **Bit-exact** — integer math only, zero floating-point operations in the library. The same input always produces the same bytes.
 - **Thread count never enters the bitstream** — splitting an image into 16× more parallel groups costs **1.4%**. Tiling in existing standards costs 3.7–8%.
-- **Small** — 1,129 lines of C99 in `src/`, 1,335 including the CLI. The decode path is 520 lines. No dependencies beyond libc.
+- **Small** — about 1,300 lines of C99 in `src/`. No dependencies beyond libc.
 - **Hostile input is expected** — the decoder returns error codes, never crashes. 300 corrupted files, 0 abnormal exits.
-- **Compression ratio is not there yet** — at equal PSNR, ingot files are **67% larger than JPEG** (see below).
+- **Roughly at JPEG parity** — with chroma subsampling on, ingot is **1.3% behind JPEG** at equal PSNR. Still behind WebP (+15%), JPEG XL (+34%), and AVIF (+159%).
 
 ```console
 $ sh build.sh
@@ -38,7 +38,7 @@ Eight axes, measured. Numbers are from 8 images of the AOM common test set, 6 qu
 | Parallelism | **done** | Group size 64 → 1024 changes file size by 1.4%, quality unchanged |
 | Simplicity | **budgeted** | Decoder core under 1,500 lines, 0 external deps, spec under 10 pages |
 | Patent freedom | expired art only | DCT (1974), Golomb (1966), Rice (1979). **No legal review yet** |
-| Compression ratio | **behind** | vs JPEG +66.9%, vs WebP +89.5%, vs JPEG XL +113.5%, vs AVIF +135.6% (PSNR BD-rate) |
+| Compression ratio | **JPEG parity** | 4:4:4 — JPEG +7.4%, WebP +20.1%, JXL +39.3%, AVIF +147.7%<br>4:2:0 — JPEG **+1.3%**, WebP +15.2%, JXL +33.5%, AVIF +159.3% |
 | Encode speed | not claimed | Currently faster, but only because it compresses less |
 | Decode speed | not measured | |
 | Generality | partially measured | Photos, screenshots, AI-generated images, game sprites |
@@ -49,7 +49,7 @@ Chroma subsampling (4:2:0) is off by default. Turning it on saves 10.2% (PSNR) /
 
 Four things every mature codec has are deliberately absent, so that each one can be measured on its own instead of trusted from a paper:
 
-1. **Intra prediction** — no spatial prediction between blocks yet. Only DC is predicted, within a group.
+1. ~~Intra prediction~~ — **added 2026-08-21.** Four modes (DC, vertical, horizontal, plane), 2 bits per block, encoder reconstructs like the decoder. Worth −34.4% PSNR.
 2. **Perceptual quantization weighting** — measured at 0 gain in this codec so far; see the note below.
 3. **Larger and variable block sizes** — fixed 8×8.
 4. **Arithmetic coding** — adaptive Golomb-Rice instead, which is simpler to debug.
@@ -63,6 +63,8 @@ What has been measured so far, each added one at a time:
 | Adaptive Golomb-Rice (8 contexts) | cumulative −11.7% | cumulative −10.4% |
 | Run-length of zero coefficients | **+6.2% (reverted)** | **+6.6% (reverted)** |
 | Chroma subsampling (optional) | −10.2% | −13.2% |
+| Intra prediction, 4 modes | **−34.4%** | **−21.0%** |
+| Adaptive coding of the block header | −49% file size at q40, −58% at q63 | |
 
 Two findings worth recording. **Run-length coding made things worse** — low-frequency coefficients are rarely zero, so "skipped zeros = 0" costs an extra bit on almost every nonzero value. And **high-frequency quantization weighting measured as pure loss under both PSNR and SSIM**, which is why it is set to 0; JPEG's quantization tables were tuned against human viewers, not against these metrics.
 

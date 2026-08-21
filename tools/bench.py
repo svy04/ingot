@@ -26,7 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 BIN = os.path.join(ROOT, "ingot.exe" if os.name == "nt" else "ingot")
 DATA = os.path.join(ROOT, "testdata")
-QUALITIES = [2, 6, 12, 20, 32, 48]
+QUALITIES = [1, 4, 10, 20, 36, 63]
 
 
 def sh(args, timeout=600):
