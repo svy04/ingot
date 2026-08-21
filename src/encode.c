@@ -139,12 +139,36 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     uint8_t scratch[1];
     int total = n * n, m, k, best = INGOT_PRED_DC;
     int64_t best_cost = -1;
+    int64_t rough[INGOT_PRED_COUNT];
+    int order[INGOT_PRED_COUNT], t, ti, tries;
 
     fetch_block(orig, pw, ph, bx, by, n, src);
     ingot_gather_neighbors(recon, pw, ph, bx, by, gx0, gy0, n, &nb);
 
+    /* 1단계: 잔차의 절대합으로 모드 순위를 매긴다. 담아 보지 않으므로 싸다. */
     for (m = 0; m < INGOT_PRED_COUNT; m++) {
+        int64_t sad = 0;
+        ingot_predict(&nb, m, pred);
+        for (k = 0; k < total; k++) {
+            int d = (int)src[k] - (int)pred[k];
+            sad += (d < 0) ? -d : d;
+        }
+        rough[m] = sad;
+        order[m] = m;
+    }
+    for (t = 1; t < INGOT_PRED_COUNT; t++) {      /* 삽입 정렬. 넷뿐이다 */
+        int key = order[t];
+        for (ti = t - 1; ti >= 0 && rough[order[ti]] > rough[key]; ti--)
+            order[ti + 1] = order[ti];
+        order[ti + 1] = key;
+    }
+
+    /* 2단계: 앞선 몇 개만 실제로 담아 보고 값과 비용으로 고른다. */
+    tries = INGOT_MODE_TRIALS;
+    if (tries > INGOT_PRED_COUNT) tries = INGOT_PRED_COUNT;
+    for (t = 0; t < tries; t++) {
         int64_t bits, dist, cost;
+        m = order[t];
         ingot_predict(&nb, m, pred);
         for (k = 0; k < total; k++)
             resid[k] = (int16_t)((int)src[k] - (int)pred[k]);
@@ -234,6 +258,16 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                             n, base, plane, pwhole, lambda) + lambda;
     restore_patch(recon, pw, ph, bx, by, n, patch);
 
+    /* 통째로 담는 값이 이미 아주 작으면 나눠 봐야 이길 수 없다. 나누면
+     * 나눔 비트와 블록 머리말이 넷으로 늘기 때문이다. 평탄한 자리가 많은
+     * 이미지에서 이 한 줄이 시험 인코딩을 크게 줄인다. */
+    if (cost_whole < lambda * INGOT_SPLIT_SKIP * INGOT_BIT_UNIT) {
+        memcpy(probs, save, sizeof(save));
+        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0);
+        return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
+                          n, base, plane, probs, lambda) + lambda;
+    }
+
     /* 후보 2: 넷으로. 앞 블록의 복원이 뒤 블록의 이웃이라 순서대로 굴려야 한다. */
     memcpy(probs, save, sizeof(save));
     ingot_rc_enc_init(&trial, scratch, 0);
@@ -281,7 +315,8 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
     uint8_t *recon[3] = { NULL, NULL, NULL };
     const uint8_t *plane[3];
     uint8_t *buf = NULL;
-    size_t cap, need, toc_off, data_off = 0;
+    size_t cap, need, toc_off, data_off = 0, slot = 0;
+    uint32_t *glen = NULL;
     uint32_t gx_count, gy_count, group_count, gi;
     int gsize, quality, group_log2, sub, p;
     int cw, ch, qbase;
@@ -358,6 +393,9 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
     }
     cap = need;
 
+    glen = (uint32_t *)calloc(group_count, sizeof(uint32_t));
+    if (!glen) { st = INGOT_ERR_MEMORY; goto done; }
+
     for (;;) {
         int retry = 0;
         buf = (uint8_t *)malloc(cap);
@@ -377,38 +415,58 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
         toc_off  = INGOT_HEADER_SIZE;
         data_off = toc_off + (size_t)group_count * INGOT_TOC_ENTRY;
 
-        for (gi = 0; gi < group_count; gi++) {
-            uint32_t gx = gi % gx_count, gy = gi / gx_count;
-            int ox = (int)gx * gsize, oy = (int)gy * gsize;
-            int gw = width - ox, gh = height - oy;
-            int csize = sub ? (gsize >> 1) : gsize;
-            int cox = sub ? (ox >> 1) : ox, coy = sub ? (oy >> 1) : oy;
-            int cgw, cgh;
-            size_t len;
-            ingot_rc_enc w;
-            uint16_t probs[INGOT_PROB_COUNT];
+        /* 조각마다 쓸 자리를 미리 똑같이 잘라 둔다. 그래야 여러 조각을
+         * 동시에 담아도 서로의 자리를 밟지 않는다. 다 담은 뒤 순서대로
+         * 당겨 붙이면서 목차를 채운다. */
+        slot = (cap - data_off) / group_count;
+        if (slot < 64) { retry = 1; }
 
-            if (gw > gsize) gw = gsize;
-            if (gh > gsize) gh = gsize;
-            cgw = cw - cox; if (cgw > csize) cgw = csize;
-            cgh = ch - coy; if (cgh > csize) cgh = csize;
+        if (!retry) {
+            int gsi, gcount = (int)group_count;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+            for (gsi = 0; gsi < gcount; gsi++) {
+                int gx = gsi % (int)gx_count, gy = gsi / (int)gx_count;
+                int ox = gx * gsize, oy = gy * gsize;
+                int gw = width - ox, gh = height - oy;
+                int csize = sub ? (gsize >> 1) : gsize;
+                int cox = sub ? (ox >> 1) : ox, coy = sub ? (oy >> 1) : oy;
+                int cgw, cgh, pp;
+                ingot_rc_enc w;
+                uint16_t probs[INGOT_PROB_COUNT];
 
-            if (data_off >= cap) { retry = 1; break; }
-            ingot_rc_enc_init(&w, buf + data_off, cap - data_off);
-            ingot_prob_reset(probs, INGOT_PROB_COUNT);
+                if (gw > gsize) gw = gsize;
+                if (gh > gsize) gh = gsize;
+                cgw = cw - cox; if (cgw > csize) cgw = csize;
+                cgh = ch - coy; if (cgh > csize) cgh = csize;
 
-            write_plane_group(&w, plane[0], recon[0], width, height,
-                              ox, oy, gw, gh, qbase, 0, probs, lambda);
-            for (p = 1; p < 3; p++)
-                write_plane_group(&w, plane[p], recon[p], cw, ch,
-                                  cox, coy, cgw, cgh, qbase, p, probs, lambda);
+                ingot_rc_enc_init(&w, buf + data_off + (size_t)gsi * slot, slot);
+                ingot_prob_reset(probs, INGOT_PROB_COUNT);
 
-            len = ingot_rc_enc_finish(&w);
-            if (w.overflow) { retry = 1; break; }
+                write_plane_group(&w, plane[0], recon[0], width, height,
+                                  ox, oy, gw, gh, qbase, 0, probs, lambda);
+                for (pp = 1; pp < 3; pp++)
+                    write_plane_group(&w, plane[pp], recon[pp], cw, ch,
+                                      cox, coy, cgw, cgh, qbase, pp, probs, lambda);
 
-            ingot_put32(buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY,     (uint32_t)data_off);
-            ingot_put32(buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY + 4, (uint32_t)len);
-            data_off += len;
+                glen[gsi] = (uint32_t)ingot_rc_enc_finish(&w);
+                if (w.overflow) retry = 1;    /* 여럿이 써도 값이 같아 무해하다 */
+            }
+        }
+
+        if (!retry) {
+            size_t dst = data_off;
+            for (gi = 0; gi < group_count; gi++) {
+                size_t src = data_off + (size_t)gi * slot;
+                if (dst != src) memmove(buf + dst, buf + src, glen[gi]);
+                ingot_put32(buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY,
+                            (uint32_t)dst);
+                ingot_put32(buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY + 4,
+                            glen[gi]);
+                dst += glen[gi];
+            }
+            data_off = dst;
         }
 
         if (!retry) break;
@@ -430,6 +488,7 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
     buf = NULL;
 
 done:
+    free(glen);
     for (p = 0; p < 3; p++) { free(full[p]); free(recon[p]); }
     for (p = 0; p < 2; p++) free(small[p]);
     free(buf);
