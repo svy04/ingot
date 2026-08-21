@@ -195,7 +195,7 @@ typedef struct {
     int      cache;
     int64_t  cache_size;
     int      overflow;
-    uint32_t bits;      /* 담은 비트 수의 어림값. 비용을 잴 때 쓴다 */
+    uint32_t bits;      /* 담은 값의 크기. 1/16 비트 단위 (INGOT_BIT_UNIT) */
 } ingot_rc_enc;
 
 typedef struct {
@@ -205,6 +205,10 @@ typedef struct {
     int      error;
 } ingot_rc_dec;
 
+/* 비트 값을 세는 눈금. 1 비트 = INGOT_BIT_UNIT 이다. */
+#define INGOT_BIT_UNIT 16
+
+uint32_t ingot_rc_price(uint16_t prob, int bit);
 void ingot_prob_reset(uint16_t *p, int count);
 
 void ingot_rc_enc_init(ingot_rc_enc *e, uint8_t *buf, size_t cap);

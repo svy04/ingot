@@ -75,7 +75,7 @@ static void store_recon(uint8_t *recon, int pw, int ph,
  * w 가 NULL 이면 비트를 세기만 하고 아무것도 쓰지 않는다(시험 인코딩). */
 static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n,
                           int plane, uint16_t *probs,
-                          const int16_t *pred, int16_t *recon)
+                          const int16_t *pred, int16_t *recon, int cut)
 {
     int16_t coef[256], z[256], deq[256], back[256];
     const uint16_t *zz = ingot_zigzag_of(n);
@@ -86,7 +86,7 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
     for (k = 0; k < total; k++) {
         int idx = zz[k];
         int step = ingot_qstep_at(base, idx, n, plane);
-        int level = ingot_quantize(coef[idx], step);
+        int level = (k < cut) ? ingot_quantize(coef[idx], step) : 0;
         z[k] = (int16_t)level;
         if (level != 0) last = k + 1;
     }
@@ -152,7 +152,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         /* 비트만 세는 시험 인코딩. 무리 상태는 사본으로 굴린다. */
         memcpy(trial_p, probs, sizeof(trial_p));
         ingot_rc_enc_init(&trial, scratch, 0);     /* 용량 0 = 세기만 한다 */
-        code_residual(&trial, resid, base, n, plane, trial_p, pred, out);
+        code_residual(&trial, resid, base, n, plane, trial_p, pred, out, total);
         bits = (int64_t)trial.bits;
         dist = block_distortion(src, out, total);
         cost = dist + lambda * bits;
@@ -164,13 +164,14 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         }
     }
 
+    for (k = 0; k < total; k++)
+        resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
+
     /* 고른 모드로 쓴다. 모드 비트도 값에 넣는다. */
     best_cost += lambda * 2;
     ingot_rc_enc_bit(w, &probs[INGOT_PROB_MODE + 0], (best >> 1) & 1);
     ingot_rc_enc_bit(w, &probs[INGOT_PROB_MODE + 1 + ((best >> 1) & 1)], best & 1);
-    for (k = 0; k < total; k++)
-        resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
-    code_residual(w, resid, base, n, plane, probs, best_pred, out);
+    code_residual(w, resid, base, n, plane, probs, best_pred, out, total);
     store_recon(recon, pw, ph, bx, by, n, out);
     return best_cost;
 }
@@ -295,7 +296,12 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
 
     /* 왜곡과 비트를 견주는 무게. 양자화가 거칠수록 비트가 비싸진다.
      * 계수는 관행값(0.85 * step^2)의 정수 근사다. */
-    lambda = ((int64_t)qbase * qbase * 87) / 100;
+    /* 비트 하나를 왜곡 얼마와 맞바꿀지 정하는 값. 100 분모다.
+     * 재서 정한다 — 너무 크면 인코더가 계수를 과하게 버린다. */
+#ifndef INGOT_LAMBDA
+#define INGOT_LAMBDA 45
+#endif
+    lambda = ((int64_t)qbase * qbase * INGOT_LAMBDA) / (100 * INGOT_BIT_UNIT);
     if (lambda < 1) lambda = 1;
 
     gx_count = ingot_groups_across(width, gsize);
