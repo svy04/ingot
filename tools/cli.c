@@ -107,8 +107,18 @@ static void usage(void)
     printf("subsample: 0 = 4:4:4 (default), 1 = 4:2:0. Do not use 1 on screenshots or text.\n");
 }
 
+#ifdef INGOT_PROB_DUMP
+void ingot_prob_dump(const char *path);
+static const char *g_dump_path;
+static void dump_at_exit(void) { if (g_dump_path) ingot_prob_dump(g_dump_path); }
+#endif
+
 int main(int argc, char **argv)
 {
+#ifdef INGOT_PROB_DUMP
+    g_dump_path = getenv("INGOT_DUMP_PATH");
+    if (g_dump_path) atexit(dump_at_exit);
+#endif
     if (argc < 2) { usage(); return 1; }
 
     if (!strcmp(argv[1], "enc") && argc >= 4) {
