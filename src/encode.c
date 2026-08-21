@@ -337,6 +337,31 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     return cost_split;
 }
 
+#ifdef INGOT_PROB_DUMP
+/* 확률표를 학습하려고 붙인 수집 장치. 평소 빌드에는 안 들어간다.
+ * 조각 하나를 다 담은 시점의 확률을 모아 두었다가 파일로 낸다. */
+#include <stdio.h>
+static double g_prob_sum[INGOT_PROB_COUNT];
+static long   g_prob_n;
+
+static void ingot_prob_collect(const uint16_t *probs)
+{
+    int i;
+    for (i = 0; i < INGOT_PROB_COUNT; i++) g_prob_sum[i] += probs[i];
+    g_prob_n++;
+}
+
+void ingot_prob_dump(const char *path)
+{
+    FILE *f = fopen(path, "a");
+    int i;
+    if (!f) return;
+    for (i = 0; i < INGOT_PROB_COUNT; i++)
+        fprintf(f, "%d %.3f\n", i, g_prob_n ? g_prob_sum[i] / g_prob_n : 1024.0);
+    fclose(f);
+}
+#endif
+
 static void write_plane_group(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                               int pw, int ph, int ox, int oy, int gw, int gh,
                               int base, int p, uint16_t *probs, int64_t lambda)
@@ -494,6 +519,9 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
                     write_plane_group(&w, plane[pp], recon[pp], cw, ch,
                                       cox, coy, cgw, cgh, qbase, pp, probs, lambda);
 
+#ifdef INGOT_PROB_DUMP
+                ingot_prob_collect(probs);
+#endif
                 glen[gsi] = (uint32_t)ingot_rc_enc_finish(&w);
                 if (w.overflow) retry = 1;    /* 여럿이 써도 값이 같아 무해하다 */
             }
