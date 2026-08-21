@@ -77,7 +77,7 @@ static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
     int total = n * n, k, prev1 = 0, prev2 = 0;
     uint32_t last;
 
-    last = ingot_rc_get_uint(r, &probs[ingot_prob_of(ingot_ctx_last(plane))]);
+    last = ingot_rc_get_uint(r, &probs[ingot_prob_of(ingot_ctx_last_n(plane, n))]);
     if (r->error) return 1;
     if (last > (uint32_t)total) return 1;
 
