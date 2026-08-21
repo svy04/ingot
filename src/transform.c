@@ -1,4 +1,4 @@
-/* transform.c - 정수 DCT. 8x8 과 16x16 두 크기를 쓴다.
+/* transform.c - 정수 DCT. 4x4, 8x8, 16x16 세 크기를 쓴다.
  *
  * 표는 DCT-II 를 256배 해서 반올림한 값이다. 규격의 일부이므로
  * 여기 숫자를 바꾸면 비트스트림이 바뀐다 (SPEC.md 「변환」 절).
@@ -7,6 +7,13 @@
  * 16x16 은 최대 4·제곱평균제곱근 1.27 — 무작위 블록 실측 2026-08-21.
  */
 #include "internal.h"
+
+const int16_t ingot_dct4[4][4] = {
+    {  128,  128,  128,  128 },
+    {  167,   69,  -69, -167 },
+    {  128, -128, -128,  128 },
+    {   69, -167,  167,  -69 }
+};
 
 const int16_t ingot_dct8[8][8] = {
     {  91,   91,   91,   91,   91,   91,   91,   91 },
@@ -70,21 +77,27 @@ static const uint16_t ingot_zz16[256] = {
     250, 251, 236, 221, 206, 191, 207, 222, 237, 252, 253, 238, 223, 239, 254, 255,
 };
 
+static const uint16_t ingot_zz4[16] = {
+     0,  1,  4,  8,  5,  2,  3,  6,  9, 12, 13, 10,  7, 11, 14, 15
+};
+
 const uint16_t *ingot_zigzag_of(int n)
 {
-    return (n == 8) ? ingot_zz8 : ingot_zz16;
+    return (n == 4) ? ingot_zz4 : (n == 8) ? ingot_zz8 : ingot_zz16;
 }
 
 static const int16_t *dct_of(int n)
 {
-    return (n == 8) ? &ingot_dct8[0][0] : &ingot_dct16[0][0];
+    return (n == 4) ? &ingot_dct4[0][0]
+         : (n == 8) ? &ingot_dct8[0][0] : &ingot_dct16[0][0];
 }
 
 void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n)
 {
     int32_t tmp[256];
     const int16_t *M = dct_of(n);
-    int shift = (n == 8) ? INGOT_FWD_SHIFT8 : INGOT_FWD_SHIFT16;
+    int shift = (n == 4) ? INGOT_FWD_SHIFT4
+              : (n == 8) ? INGOT_FWD_SHIFT8 : INGOT_FWD_SHIFT16;
     int u, v, x, y;
 
     for (y = 0; y < n; y++) {
@@ -113,7 +126,8 @@ void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n)
 {
     int32_t tmp[256];
     const int16_t *M = dct_of(n);
-    int shift = (n == 8) ? INGOT_INV_SHIFT8 : INGOT_INV_SHIFT16;
+    int shift = (n == 4) ? INGOT_INV_SHIFT4
+              : (n == 8) ? INGOT_INV_SHIFT8 : INGOT_INV_SHIFT16;
     int u, v, x, y;
 
     for (u = 0; u < n; u++) {

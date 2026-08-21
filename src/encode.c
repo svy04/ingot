@@ -176,76 +176,88 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     return best_cost;
 }
 
-/* 떠 둔 16x16 복원 화소를 되돌린다. */
-static void restore_patch(uint8_t *recon, int pw, int ph,
-                          int mx, int my, const uint8_t *patch)
+/* 복원 평면에서 n x n 자리를 떠 두고, 되돌린다. 분할을 견주는 동안
+ * 복원 화소가 바뀌므로 후보마다 원래대로 되돌려야 한다. */
+static void save_patch(const uint8_t *recon, int pw, int ph,
+                       int bx, int by, int n, uint8_t *patch)
 {
     int y, x;
-    for (y = 0; y < 16; y++)
-        for (x = 0; x < 16; x++) {
-            int dy = my + y, dx = mx + x;
-            if (dy >= 0 && dy < ph && dx >= 0 && dx < pw)
-                recon[(size_t)dy * pw + dx] = patch[y * 16 + x];
+    for (y = 0; y < n; y++)
+        for (x = 0; x < n; x++) {
+            int dy = by + y, dx = bx + x;
+            patch[y * n + x] =
+                (dy >= 0 && dy < ph && dx >= 0 && dx < pw)
+                ? recon[(size_t)dy * pw + dx] : 0;
         }
 }
 
-/* 16x16 묶음 하나. 한 덩어리와 넷으로 나눈 것을 견주어 싼 쪽을 쓴다.
- *
- * 두 후보를 모두 '버리는 통로'에 써서 비용을 재고, 이긴 쪽만 진짜 통로에 쓴다.
- * 그 사이 무리 상태와 복원 화소는 매번 되돌린다. */
-static void code_macro(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
-                       int pw, int ph, int mx, int my, int gx0, int gy0,
-                       int base, int plane, uint16_t *probs, int64_t lambda)
+static void restore_patch(uint8_t *recon, int pw, int ph,
+                          int bx, int by, int n, const uint8_t *patch)
 {
-    uint16_t save[INGOT_PROB_COUNT], p16[INGOT_PROB_COUNT];
-    uint8_t patch[256];
+    int y, x;
+    for (y = 0; y < n; y++)
+        for (x = 0; x < n; x++) {
+            int dy = by + y, dx = bx + x;
+            if (dy >= 0 && dy < ph && dx >= 0 && dx < pw)
+                recon[(size_t)dy * pw + dx] = patch[y * n + x];
+        }
+}
+
+/* 크기 n 덩어리 하나. 가장 작은 크기가 아니면, 통째로 담는 것과 넷으로
+ * 나누는 것을 견주어 싼 쪽을 쓴다.
+ *
+ * 두 후보를 모두 버리는 통로에 써서 비용을 재고, 이긴 쪽만 진짜 통로에 쓴다.
+ * 그 사이 무리 상태와 복원 화소는 매번 되돌린다. */
+static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
+                         int pw, int ph, int bx, int by, int gx0, int gy0,
+                         int n, int base, int plane, uint16_t *probs,
+                         int64_t lambda)
+{
+    uint16_t save[INGOT_PROB_COUNT], pwhole[INGOT_PROB_COUNT];
+    uint8_t patch[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
     uint8_t scratch[1];
     ingot_rc_enc trial;
-    int64_t cost16, cost8 = 0;
-    int i, y, x;
+    int64_t cost_whole, cost_split = 0;
+    int i, h = n >> 1, sidx = (n == 16) ? 0 : 1;
 
-    /* 복원 평면의 이 자리를 떠 둔다. */
-    for (y = 0; y < 16; y++)
-        for (x = 0; x < 16; x++) {
-            int dy = my + y, dx = mx + x;
-            patch[y * 16 + x] =
-                (dy < ph && dx < pw && dy >= 0 && dx >= 0)
-                ? recon[(size_t)dy * pw + dx] : 0;
-        }
+    if (n <= INGOT_MIN_BLOCK)
+        return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
+                          n, base, plane, probs, lambda);
+
+    save_patch(recon, pw, ph, bx, by, n, patch);
     memcpy(save, probs, sizeof(save));
 
-    /* 후보 1: 16x16 하나 */
-    memcpy(p16, probs, sizeof(p16));
+    /* 후보 1: 통째로 하나 */
+    memcpy(pwhole, probs, sizeof(pwhole));
     ingot_rc_enc_init(&trial, scratch, 0);
-    cost16 = code_block(&trial, orig, recon, pw, ph, mx, my, gx0, gy0,
-                        16, base, plane, p16, lambda) + lambda;
-    restore_patch(recon, pw, ph, mx, my, patch);
+    cost_whole = code_block(&trial, orig, recon, pw, ph, bx, by, gx0, gy0,
+                            n, base, plane, pwhole, lambda) + lambda;
+    restore_patch(recon, pw, ph, bx, by, n, patch);
 
-    /* 후보 2: 8x8 넷. 앞 블록의 복원이 뒤 블록의 이웃이라 순서대로 굴려야 한다. */
+    /* 후보 2: 넷으로. 앞 블록의 복원이 뒤 블록의 이웃이라 순서대로 굴려야 한다. */
     memcpy(probs, save, sizeof(save));
     ingot_rc_enc_init(&trial, scratch, 0);
-    for (i = 0; i < 4; i++) {
-        int bx = mx + (i & 1) * 8, by = my + (i >> 1) * 8;
-        cost8 += code_block(&trial, orig, recon, pw, ph, bx, by, gx0, gy0,
-                            8, base, plane, probs, lambda);
-    }
-    cost8 += lambda;
-    restore_patch(recon, pw, ph, mx, my, patch);
+    for (i = 0; i < 4; i++)
+        cost_split += code_quad(&trial, orig, recon, pw, ph,
+                                bx + (i & 1) * h, by + (i >> 1) * h,
+                                gx0, gy0, h, base, plane, probs, lambda);
+    cost_split += lambda;
+    restore_patch(recon, pw, ph, bx, by, n, patch);
     memcpy(probs, save, sizeof(save));
 
     /* 이긴 쪽을 진짜로 쓴다. */
-    if (cost16 <= cost8) {
-        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT], 0);
-        code_block(w, orig, recon, pw, ph, mx, my, gx0, gy0,
-                   16, base, plane, probs, lambda);
-    } else {
-        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT], 1);
-        for (i = 0; i < 4; i++) {
-            int bx = mx + (i & 1) * 8, by = my + (i >> 1) * 8;
-            code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                       8, base, plane, probs, lambda);
-        }
+    if (cost_whole <= cost_split) {
+        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0);
+        return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
+                          n, base, plane, probs, lambda) + lambda;
     }
+    ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1);
+    cost_split = lambda;
+    for (i = 0; i < 4; i++)
+        cost_split += code_quad(w, orig, recon, pw, ph,
+                                bx + (i & 1) * h, by + (i >> 1) * h,
+                                gx0, gy0, h, base, plane, probs, lambda);
+    return cost_split;
 }
 
 static void write_plane_group(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
@@ -255,8 +267,8 @@ static void write_plane_group(ingot_rc_enc *w, const uint8_t *orig, uint8_t *rec
     int my, mx;
     for (my = 0; my < gh; my += 16)
         for (mx = 0; mx < gw; mx += 16)
-            code_macro(w, orig, recon, pw, ph, ox + mx, oy + my, ox, oy,
-                       base, p, probs, lambda);
+            code_quad(w, orig, recon, pw, ph, ox + mx, oy + my, ox, oy,
+                      16, base, p, probs, lambda);
 }
 
 ingot_status ingot_encode(const uint8_t *rgb, int width, int height,

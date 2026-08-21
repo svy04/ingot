@@ -17,12 +17,21 @@
 #define INGOT_TOC_ENTRY    8
 #define INGOT_BLOCK        8
 #define INGOT_BLOCK16     16
+/* 4x4 는 8x8 과 같은 눈금을 쓴다. 그래야 같은 양자화 스텝이 같은 세기로 든다. */
+#define INGOT_FWD_SHIFT4  14
+#define INGOT_INV_SHIFT4  18
+/* 가장 큰 블록과 가장 작은 블록. 16 -> 8 -> 4 로 나뉜다. */
+#define INGOT_MAX_BLOCK   16
+#ifndef INGOT_MIN_BLOCK
+#define INGOT_MIN_BLOCK 4
+#endif
 #define INGOT_FWD_SHIFT8  14
 #define INGOT_INV_SHIFT8  18
 #define INGOT_FWD_SHIFT16 15
 #define INGOT_INV_SHIFT16 17
 
 /* ---- 변환 (transform.c) ---- */
+extern const int16_t ingot_dct4[4][4];
 extern const int16_t ingot_dct8[8][8];
 extern const int16_t ingot_dct16[16][16];
 extern const uint16_t ingot_zz8[64];
@@ -184,7 +193,7 @@ static inline void ingot_ctx_update(ingot_ctx *c, uint32_t k)
  * 거기에 분할 1개와 모드 3개를 더한다. */
 #define INGOT_PROB_PER_CTX 2
 #define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
-#define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + 1)
+#define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + 2)   /* 16->8 과 8->4, 둘 */
 #define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 3)
 
 typedef struct {
