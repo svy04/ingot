@@ -147,28 +147,36 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
     return 0;
 }
 
+/* 크기 n 덩어리 하나를 읽는다. 가장 작은 크기가 아니면 먼저 나눔 비트를 본다. */
+static int read_quad(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
+                     int bx, int by, int gx0, int gy0, int n,
+                     int base, int p, uint16_t *probs)
+{
+    int i, h = n >> 1, sidx = (n == 16) ? 0 : 1;
+
+    if (n <= INGOT_MIN_BLOCK)
+        return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p, probs);
+
+    if (!ingot_rc_dec_bit(r, &probs[INGOT_PROB_SPLIT + sidx])) {
+        if (r->error) return 1;
+        return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p, probs);
+    }
+    if (r->error) return 1;
+    for (i = 0; i < 4; i++)
+        if (read_quad(r, plane, pw, ph, bx + (i & 1) * h, by + (i >> 1) * h,
+                      gx0, gy0, h, base, p, probs)) return 1;
+    return 0;
+}
+
 static int read_plane_group(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                             int ox, int oy, int gw, int gh,
                             int base, int p, uint16_t *probs)
 {
-    int my, mx, i;
-    for (my = 0; my < gh; my += 16) {
-        for (mx = 0; mx < gw; mx += 16) {
-            uint32_t split = (uint32_t)ingot_rc_dec_bit(r, &probs[INGOT_PROB_SPLIT]);
-            if (r->error) return 1;
-            if (!split) {
-                if (read_block(r, plane, pw, ph, ox + mx, oy + my,
-                               ox, oy, 16, base, p, probs)) return 1;
-            } else {
-                for (i = 0; i < 4; i++) {
-                    int bx = ox + mx + (i & 1) * 8;
-                    int by = oy + my + (i >> 1) * 8;
-                    if (read_block(r, plane, pw, ph, bx, by,
-                                   ox, oy, 8, base, p, probs)) return 1;
-                }
-            }
-        }
-    }
+    int my, mx;
+    for (my = 0; my < gh; my += 16)
+        for (mx = 0; mx < gw; mx += 16)
+            if (read_quad(r, plane, pw, ph, ox + mx, oy + my, ox, oy,
+                          16, base, p, probs)) return 1;
     return 0;
 }
 
