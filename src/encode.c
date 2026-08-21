@@ -118,15 +118,41 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
  * (2026-08-22 발견). */
 #define INGOT_RD_SCALE 256
 
-/* 복원과 원본의 제곱 오차. 분할을 고를 때 쓴다. */
-static int64_t block_distortion(const int16_t *a, const int16_t *b, int total)
+/* 복원과 원본의 차이를 값으로 매긴다. 모드·분할을 고를 때 쓴다.
+ *
+ * 블록의 마지막 열과 마지막 행은 다음 블록의 예측 이웃이 된다. 거기가
+ * 틀리면 오차가 이 블록에서 끝나지 않고 옆으로 번지는데, 블록 하나만 보는
+ * 자는 그 전파를 못 본다. 그래서 경계 화소를 더 비싸게 센다.
+ *
+ * INGOT_EDGE 는 16 분모다. 16 이면 예전과 같다. 규격이 아니라 인코더의
+ * 판단이므로 이 값을 바꿔도 옛 파일이 그대로 읽힌다. */
+#ifndef INGOT_EDGE
+#define INGOT_EDGE 32   /* 재서 정했다: 32/16 에서 전 칸이 조금씩 좋아진다 (2026-08-22) */
+#endif
+
+static int64_t block_distortion_n(const int16_t *a, const int16_t *b,
+                                  int total, int n)
 {
     int64_t s = 0;
+#if INGOT_EDGE == 16
     int i;
+    (void)n;
     for (i = 0; i < total; i++) {
         int d = (int)a[i] - (int)b[i];
         s += (int64_t)d * d;
     }
+#else
+    int y, x;
+    (void)total;
+    for (y = 0; y < n; y++) {
+        for (x = 0; x < n; x++) {
+            int d = (int)a[y * n + x] - (int)b[y * n + x];
+            int64_t e = (int64_t)d * d;
+            if (x == n - 1 || y == n - 1) e = (e * INGOT_EDGE) / 16;
+            s += e;
+        }
+    }
+#endif
     return s;
 }
 
@@ -184,7 +210,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         ingot_rc_enc_init(&trial, scratch, 0);     /* 용량 0 = 세기만 한다 */
         code_residual(&trial, resid, base, n, plane, trial_p, pred, out, total);
         bits = (int64_t)trial.bits;
-        dist = block_distortion(src, out, total);
+        dist = block_distortion_n(src, out, total, n);
         cost = dist * INGOT_RD_SCALE + lambda * bits;
 
         if (best_cost < 0 || cost < best_cost) {
