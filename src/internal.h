@@ -49,6 +49,18 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n);
 #define INGOT_PRED_PLANE  3
 #define INGOT_PRED_COUNT  4
 
+/* 실제로 담아 보는 모드 수. 나머지는 잔차 절대합 순위에서 걸러진다.
+ * 인코더만의 선택이라 규격이 아니다. */
+#ifndef INGOT_MODE_TRIALS
+#define INGOT_MODE_TRIALS 2
+#endif
+
+/* 통째로 담는 값이 이 비트 수보다 싸면 나누는 쪽을 아예 재지 않는다.
+ * 0 이면 언제나 둘 다 잰다. 인코더만의 선택이라 규격이 아니다. */
+#ifndef INGOT_SPLIT_SKIP
+#define INGOT_SPLIT_SKIP 24
+#endif
+
 typedef struct {
     int n;                      /* 블록 한 변. 8 또는 16 */
     int top[16], left[16], topleft;
