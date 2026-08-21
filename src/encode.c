@@ -191,8 +191,11 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     for (k = 0; k < total; k++)
         resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
 
-    /* 고른 모드로 쓴다. 모드 비트도 값에 넣는다. */
-    best_cost += lambda * 2;
+    /* 고른 모드로 쓴다. 모드 비트도 값에 넣는다.
+     * 비트 수에 INGOT_BIT_UNIT 을 곱해야 code_residual 이 세는 값과 눈금이 맞는다.
+     * 이것을 빠뜨리면 머리말 비트가 실제의 1/16 로 매겨져, 인코더가 블록을
+     * 쪼개는 비용을 거의 공짜로 본다 (2026-08-22 발견). */
+    best_cost += lambda * 2 * INGOT_BIT_UNIT;
     ingot_rc_enc_bit(w, &probs[INGOT_PROB_MODE + 0], (best >> 1) & 1);
     ingot_rc_enc_bit(w, &probs[INGOT_PROB_MODE + 1 + ((best >> 1) & 1)], best & 1);
     code_residual(w, resid, base, n, plane, probs, best_pred, out, total);
@@ -255,7 +258,8 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     memcpy(pwhole, probs, sizeof(pwhole));
     ingot_rc_enc_init(&trial, scratch, 0);
     cost_whole = code_block(&trial, orig, recon, pw, ph, bx, by, gx0, gy0,
-                            n, base, plane, pwhole, lambda) + lambda;
+                            n, base, plane, pwhole, lambda)
+               + lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
 
     /* 통째로 담는 값이 이미 아주 작으면 나눠 봐야 이길 수 없다. 나누면
@@ -265,7 +269,8 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         memcpy(probs, save, sizeof(save));
         ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0);
         return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                          n, base, plane, probs, lambda) + lambda;
+                          n, base, plane, probs, lambda)
+             + lambda * INGOT_BIT_UNIT;
     }
 
     /* 후보 2: 넷으로. 앞 블록의 복원이 뒤 블록의 이웃이라 순서대로 굴려야 한다. */
@@ -275,7 +280,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         cost_split += code_quad(&trial, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
                                 gx0, gy0, h, base, plane, probs, lambda);
-    cost_split += lambda;
+    cost_split += lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
     memcpy(probs, save, sizeof(save));
 
@@ -283,10 +288,11 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     if (cost_whole <= cost_split) {
         ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0);
         return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                          n, base, plane, probs, lambda) + lambda;
+                          n, base, plane, probs, lambda)
+             + lambda * INGOT_BIT_UNIT;
     }
     ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1);
-    cost_split = lambda;
+    cost_split = lambda * INGOT_BIT_UNIT;
     for (i = 0; i < 4; i++)
         cost_split += code_quad(w, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
@@ -346,7 +352,7 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
     /* 비트 하나를 왜곡 얼마와 맞바꿀지 정하는 값. 100 분모다.
      * 재서 정한다 — 너무 크면 인코더가 계수를 과하게 버린다. */
 #ifndef INGOT_LAMBDA
-#define INGOT_LAMBDA 45
+#define INGOT_LAMBDA 10
 #endif
     lambda = ((int64_t)qbase * qbase * INGOT_LAMBDA) / (100 * INGOT_BIT_UNIT);
     if (lambda < 1) lambda = 1;
