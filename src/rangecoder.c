@@ -17,6 +17,37 @@
 #define RC_PROB_INIT  (1 << (RC_PROB_BITS - 1))   /* 반반에서 시작 */
 #define RC_MOVE_BITS  5
 
+/* ---- 비트 값 표 ----
+ *
+ * 산술 부호화에서는 결정 하나가 1 비트가 아니다. 확률이 한쪽으로 쏠려 있으면
+ * 0.05 비트일 수도 있고, 뜻밖의 값이면 5 비트일 수도 있다. 그래서 결정 개수를
+ * 세면 인코더가 값과 비용을 잘못 저울질한다 (2026-08-21 실측: 개수로 세는
+ * 동안 꼬리 자르기가 BD-rate 를 24 퍼센트포인트나 망쳤다).
+ *
+ * 아래 표는 확률마다 -log2(p) 를 1/16 비트 단위로 적어 둔 것이다.
+ * 정수 제곱만으로 만들었으므로 어느 기계에서나 같다.
+ */
+static const uint16_t rc_price[128] = {
+     128,  103,   91,   84,   78,   73,   69,   66,   63,   61,   58,   56,
+      54,   52,   51,   49,   48,   46,   45,   44,   43,   42,   41,   40,
+      39,   38,   37,   36,   35,   34,   34,   33,   32,   31,   31,   30,
+      29,   29,   28,   28,   27,   26,   26,   25,   25,   24,   24,   23,
+      23,   22,   22,   22,   21,   21,   20,   20,   19,   19,   19,   18,
+      18,   17,   17,   17,   16,   16,   16,   15,   15,   15,   14,   14,
+      14,   13,   13,   13,   12,   12,   12,   11,   11,   11,   11,   10,
+      10,   10,   10,    9,    9,    9,    9,    8,    8,    8,    8,    7,
+       7,    7,    7,    6,    6,    6,    6,    5,    5,    5,    5,    5,
+       4,    4,    4,    4,    3,    3,    3,    3,    3,    2,    2,    2,
+       2,    2,    2,    1,    1,    1,    1,    1
+};
+
+/* 확률 prob 인 자리에 bit 를 담을 때 드는 값. 1/16 비트 단위. */
+uint32_t ingot_rc_price(uint16_t prob, int bit)
+{
+    uint32_t p = bit ? ((1u << 11) - prob) : prob;
+    return rc_price[p >> 4];
+}
+
 void ingot_prob_reset(uint16_t *p, int count)
 {
     int i;
@@ -68,7 +99,7 @@ void ingot_rc_enc_bit(ingot_rc_enc *e, uint16_t *prob, int bit)
 {
     uint32_t bound = (e->range >> RC_PROB_BITS) * (uint32_t)(*prob);
 
-    e->bits++;
+    e->bits += ingot_rc_price(*prob, bit);
     if (!bit) {
         e->range = bound;
         *prob = (uint16_t)(*prob + (((1 << RC_PROB_BITS) - *prob) >> RC_MOVE_BITS));
@@ -87,8 +118,8 @@ void ingot_rc_enc_bit(ingot_rc_enc *e, uint16_t *prob, int bit)
 void ingot_rc_enc_bypass(ingot_rc_enc *e, uint32_t value, int nbits)
 {
     int i;
+    e->bits += (uint32_t)nbits * INGOT_BIT_UNIT;   /* 반반이니 정확히 nbits */
     for (i = nbits - 1; i >= 0; i--) {
-        e->bits++;
         e->range >>= 1;
         if ((value >> i) & 1u) e->low += e->range;
         while (e->range < RC_TOP) {
