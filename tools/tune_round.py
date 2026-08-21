@@ -5,7 +5,7 @@
 """
 import subprocess, sys, os, re
 
-CANDS = [45, 20, 10, 5]
+CANDS = [0, 8, 16, 32]
 SRC = ("src/transform.c src/color.c src/predict.c src/bitio.c "
        "src/rangecoder.c src/encode.c src/decode.c tools/cli.c")
 
