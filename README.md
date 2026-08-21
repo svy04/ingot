@@ -2,16 +2,16 @@
 
 ![](docs/banner.png)
 
-A lossy image codec built to win on **several axes at once** — not just compression ratio. This is **v1.1**: the format is frozen, and the numbers below are what froze it.
+A lossy image codec built to win on **several axes at once** — not just compression ratio. This is **v1.2**.
 
 [한국어](README.ko.md)
 
 Most codecs trade one property for another. ingot picks the axes that were left empty because nobody optimized for them, and locks them into the format itself.
 
-- **Ahead of JPEG on all three metrics** — BD-rate **−23.3%** (PSNR), **−21.1%** (SSIM), **−11.3%** (SSIMULACRA2) on standard photos. Ahead of WebP on PSNR by **−4.4%**, level with JPEG XL.
+- **Ahead of JPEG and WebP on all three metrics** — against JPEG **−27.5%** (PSNR), **−25.4%** (SSIM), **−16.7%** (SSIMULACRA2) on standard photos; against WebP **−10.7%**, **−1.5%**, **−5.8%**. Ahead of JPEG XL on PSNR by **−5.5%**. AVIF is still ahead of us.
 - **Bit-exact** — integer math only, zero floating-point operations in the library. The same input always produces the same bytes.
 - **Thread count never enters the bitstream** — any number of threads, identical bytes out. The price is real and grows as groups shrink: **2.7%** at the default 256, **29.7%** at 64, measured against one group per image (6 images, 6 quality steps). Tiling in existing standards costs 3.7–8%, so this is ahead only near the default.
-- **Small** — 2,030 lines of C99 in `src/`, of which 1,303 are on the decode path. No dependencies beyond libc.
+- **Small** — 2,134 lines of C99 in `src/`, of which 1,363 are on the decode path. No dependencies beyond libc.
 - **Hostile input is expected** — the decoder returns error codes, never crashes. 300 corrupted files, 0 abnormal exits.
 
 ```console
@@ -36,10 +36,10 @@ Input and output are PPM (P6, 8-bit) only. Convert other formats with ffmpeg.
 
 | vs | PSNR | SSIM | SSIMULACRA2 |
 |---|---|---|---|
-| JPEG | **−23.3%** | **−21.1%** | **−11.3%** |
-| WebP | **−4.4%** | +5.4% | +1.3% |
-| JPEG XL | +0.1% | +19.0% | +34.0% |
-| AVIF | +70.6% | +70.5% | +43.5% |
+| JPEG | **−27.5%** | **−25.4%** | **−16.7%** |
+| WebP | **−10.7%** | **−1.5%** | **−5.8%** |
+| JPEG XL | **−5.5%** | +12.2% | +25.2% |
+| AVIF | +62.2% | +63.1% | +36.1% |
 
 **The third column is why v1.1 exists.** Up to v1.0 this codec was tuned against squared error alone. Adding a perceptual metric showed that at the old setting it lost to *JPEG* on SSIMULACRA2 (+5.6%) while appearing to beat WebP and JPEG XL on PSNR. One spec constant — how much coarser high-frequency coefficients are quantized — moved it from +5.6% to **−11.3%** against JPEG, at the cost of 2.4 points of PSNR. v1.1 takes that trade.
 
@@ -53,12 +53,12 @@ SSIMULACRA2 is a perceptual metric designed for still images; the Python impleme
 
 | vs | PSNR | SSIM | SSIMULACRA2 |
 |---|---|---|---|
-| JPEG | **−35.2%** | **−26.9%** | **−26.9%** |
-| WebP | **−8.5%** | **−3.4%** | +4.7% |
-| JPEG XL | **−17.6%** | **−0.9%** | +40.6% |
-| AVIF | +115.6% | +127.1% | +82.5% |
+| JPEG | **−41.1%** | **−34.1%** | **−31.3%** |
+| WebP | **−16.4%** | **−13.6%** | **−1.3%** |
+| JPEG XL | **−25.6%** | **−13.4%** | +30.9% |
+| AVIF | +99.3% | +107.0% | +74.9% |
 
-On this material ingot beats JPEG on all three metrics, and WebP and JPEG XL on two of three.
+On this material ingot beats JPEG and WebP on all three metrics, and JPEG XL on two of three.
 
 ### The other axes
 
@@ -66,10 +66,10 @@ On this material ingot beats JPEG on all three metrics, and WebP and JPEG XL on 
 |---|---|---|
 | Determinism | **done** | Encoding twice gives identical bytes. 0 float ops in `src/` |
 | Parallelism | **in the format; the price is larger than first measured** | Against one group per image: 256 (default) **+2.7%**, 128 +9.8%, 64 **+29.7%** BD-rate. The 1.4% printed here until 2026-08-22 was measured before arithmetic coding, which resets the probability tables at every group boundary — small groups now have too few symbols to learn from. The encoder writes each group into its own slot, so an OpenMP build parallelizes it; this machine has no OpenMP runtime |
-| Simplicity | **budgeted, never benchmarked against anyone** | Decode path 1,303 lines, 2,030 total, 0 external deps, spec under 12 pages. No competitor has been measured on this axis |
+| Simplicity | **budgeted, never benchmarked against anyone** | Decode path 1,363 lines, 2,134 total, 0 external deps, spec under 12 pages. No competitor has been measured on this axis |
 | Patent freedom | expired art only | DCT (1974), Golomb (1966), arithmetic coding (late 1970s). **No legal review yet** |
-| Decode speed | **slowest of the five** | Wall clock 0.096 s vs JPEG 0.065, WebP 0.076, JXL 0.088, AVIF 0.100 — but process startup alone is 0.059 s for ffmpeg and 0.028 s for our CLI. Subtract it and the actual decode is 0.068 s vs JPEG 0.006, WebP 0.017, JXL 0.029, AVIF 0.041. We are last, by 11× against JPEG |
-| Encode speed | **behind** | 1.16 s vs JPEG 0.081, WebP 0.155, JXL 0.190. Faster than AVIF (6.49 s) |
+| Decode speed | **slowest of the five, and got slower** | Wall clock 0.178 s. Process startup alone is 0.059 s for ffmpeg and 0.028 s for our CLI; subtract it and the actual decode is 0.150 s vs JPEG 0.006, WebP 0.017, JXL 0.029, AVIF 0.041. The 2D context and the extra coefficient flags cost 0.08 s. This axis is going the wrong way and is not being paid for |
+| Encode speed | **behind** | 1.64 s vs JPEG 0.081, WebP 0.155, JXL 0.190. Faster than AVIF (6.49 s). The 2D coefficient context added 0.5 s |
 
 Chroma subsampling (4:2:0) is off by default and measures as a loss on standard photos (PSNR +1.4% vs +0.1% against JXL). It costs **8.5 dB on screenshots**, so never turn it on for text or UI.
 
