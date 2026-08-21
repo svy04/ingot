@@ -124,7 +124,13 @@ static inline int ingot_dequantize(int level, int step)
  *   (PSNR -0.58%, SSIM -1.51%). SSIM 만 보면 32 가 -8.95% 로 훨씬 좋지만
  *   그 값은 PSNR 에서 +2.87% 라 지표 편향이 의심된다. 보수적으로 고른다. */
 #ifndef INGOT_QW_ALPHA
-#define INGOT_QW_ALPHA 0
+/* 자리가 높을수록 양자화를 거칠게 한다. 사람 눈은 고주파 오차를 덜 본다.
+ * 제곱 오차로만 재면 0 이 최선으로 나온다. 그런데 지각 지표(SSIMULACRA2)로
+ * 재면 0 에서는 JPEG 에게도 진다(+5.6%). 1 은 세 지표 모두에서 JPEG 을
+ * 이기는 가장 작은 값이고, 거기서 PSNR 로 WebP 도 -4.4% 앞선다.
+ * 2 로 더 가면 SSIMULACRA2 는 나아지지만 PSNR·SSIM 을 더 내준다.
+ * (2026-08-21, AOM 8장 실측) */
+#define INGOT_QW_ALPHA 1
 #endif
 #ifndef INGOT_QW_CHROMA
 #define INGOT_QW_CHROMA 20
