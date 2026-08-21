@@ -69,23 +69,24 @@ ingot_status ingot_probe(const uint8_t *data, size_t size, int *width, int *heig
 }
 
 /* 잔차 블록 하나를 읽어 역변환까지 한다. 규격을 벗어나면 0 이 아닌 값을 돌려준다. */
-static int read_residual(ingot_br *r, int base, int plane,
+static int read_residual(ingot_br *r, int base, int n, int plane,
                          ingot_ctx *ctx, int16_t *back)
 {
-    int16_t deq[64];
+    int16_t deq[256];
+    const uint16_t *zz = ingot_zigzag_of(n);
+    int total = n * n, k;
     uint32_t last;
-    int k;
 
     last = ingot_br_get_rice_u(r, &ctx[ingot_ctx_last(plane)]);
     if (r->error) return 1;
-    if (last > 64) return 1;
+    if (last > (uint32_t)total) return 1;
 
-    for (k = 0; k < 64; k++) deq[ingot_zigzag[k]] = 0;
+    for (k = 0; k < total; k++) deq[k] = 0;
 
     for (k = 0; k < (int)last; k++) {
-        int idx = ingot_zigzag[k];
-        int step = ingot_qstep_at(base, idx, plane);
-        int level = ingot_br_get_rice(r, &ctx[ingot_ctx_index(k, plane)]);
+        int idx = zz[k];
+        int step = ingot_qstep_at(base, idx, n, plane);
+        int level = ingot_br_get_rice(r, &ctx[ingot_ctx_index(k, n, plane)]);
         int v;
         if (r->error) return 1;
         if (level > 32767 || level < -32768) return 1;
@@ -95,49 +96,70 @@ static int read_residual(ingot_br *r, int base, int plane,
         deq[idx] = (int16_t)v;
     }
 
-    ingot_idct8x8(deq, back, 8);
+    ingot_idct(deq, back, n, n);
     return 0;
 }
 
 /* 복원 블록을 평면에 쓴다. 평면 밖으로 나가는 부분은 버린다. */
 static void store_block(uint8_t *plane, int pw, int ph,
-                        int bx, int by, const int16_t *blk)
+                        int bx, int by, int n, const int16_t *blk)
 {
     int y, x;
-    for (y = 0; y < 8; y++) {
+    for (y = 0; y < n; y++) {
         int dy = by + y;
         if (dy < 0 || dy >= ph) continue;
-        for (x = 0; x < 8; x++) {
+        for (x = 0; x < n; x++) {
             int dx = bx + x;
             if (dx < 0 || dx >= pw) continue;
             plane[(size_t)dy * pw + dx] =
-                (uint8_t)ingot_clamp_u8((int)blk[y * 8 + x]);
+                (uint8_t)ingot_clamp_u8((int)blk[y * n + x]);
         }
     }
+}
+
+static int read_block(ingot_br *r, uint8_t *plane, int pw, int ph,
+                      int bx, int by, int gx0, int gy0, int n,
+                      int base, int p, ingot_ctx *ctx)
+{
+    int16_t pred[256], back[256], out[256];
+    ingot_neighbors nb;
+    uint32_t mode;
+    int total = n * n, k;
+
+    mode = ingot_br_get(r, 2);
+    if (r->error) return 1;
+
+    ingot_gather_neighbors(plane, pw, ph, bx, by, gx0, gy0, n, &nb);
+    ingot_predict(&nb, (int)mode, pred);
+
+    if (read_residual(r, base, n, p, ctx, back)) return 1;
+
+    for (k = 0; k < total; k++)
+        out[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
+    store_block(plane, pw, ph, bx, by, n, out);
+    return 0;
 }
 
 static int read_plane_group(ingot_br *r, uint8_t *plane, int pw, int ph,
                             int ox, int oy, int gw, int gh,
                             int base, int p, ingot_ctx *ctx)
 {
-    int by, bx, k;
-    for (by = 0; by < gh; by += 8) {
-        for (bx = 0; bx < gw; bx += 8) {
-            int16_t pred[64], back[64], out[64];
-            ingot_neighbors nb;
-            uint32_t mode;
-
-            mode = ingot_br_get(r, 2);
+    int my, mx, i;
+    for (my = 0; my < gh; my += 16) {
+        for (mx = 0; mx < gw; mx += 16) {
+            uint32_t split = ingot_br_get(r, 1);
             if (r->error) return 1;
-
-            ingot_gather_neighbors(plane, pw, ph, ox + bx, oy + by, ox, oy, &nb);
-            ingot_predict(&nb, (int)mode, pred);
-
-            if (read_residual(r, base, p, ctx, back)) return 1;
-
-            for (k = 0; k < 64; k++)
-                out[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
-            store_block(plane, pw, ph, ox + bx, oy + by, out);
+            if (!split) {
+                if (read_block(r, plane, pw, ph, ox + mx, oy + my,
+                               ox, oy, 16, base, p, ctx)) return 1;
+            } else {
+                for (i = 0; i < 4; i++) {
+                    int bx = ox + mx + (i & 1) * 8;
+                    int by = oy + my + (i >> 1) * 8;
+                    if (read_block(r, plane, pw, ph, bx, by,
+                                   ox, oy, 8, base, p, ctx)) return 1;
+                }
+            }
         }
     }
     return 0;
@@ -169,13 +191,14 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
     uint8_t *rgb = NULL;
     ingot_status st;
     uint32_t gi;
-    int p;
+    int p, qbase;
 
     if (rgb_out) *rgb_out = NULL;
     if (!data || !rgb_out) return INGOT_ERR_ARG;
 
     st = parse_header(data, size, &h);
     if (st != INGOT_OK) return st;
+    qbase = ingot_qstep(h.quality);
 
     {
         size_t n = (size_t)h.width * (size_t)h.height;
@@ -214,12 +237,12 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         ingot_ctx_reset(ctx);
 
         if (read_plane_group(&r, plane[0], h.width, h.height, ox, oy, gw, gh,
-                             ingot_qstep(h.quality), 0, ctx)) {
+                             qbase, 0, ctx)) {
             st = INGOT_ERR_BITSTREAM; goto done;
         }
         for (p = 1; p < 3; p++) {
             if (read_plane_group(&r, plane[p], h.cw, h.ch, cox, coy, cgw, cgh,
-                                 ingot_qstep(h.quality), p, ctx)) {
+                                 qbase, p, ctx)) {
                 st = INGOT_ERR_BITSTREAM; goto done;
             }
         }

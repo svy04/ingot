@@ -10,7 +10,7 @@ Most codecs trade one property for another. ingot picks the axes that were left 
 - **Thread count never enters the bitstream** — splitting an image into 16× more parallel groups costs **1.4%**. Tiling in existing standards costs 3.7–8%.
 - **Small** — about 1,300 lines of C99 in `src/`. No dependencies beyond libc.
 - **Hostile input is expected** — the decoder returns error codes, never crashes. 300 corrupted files, 0 abnormal exits.
-- **Roughly at JPEG parity** — with chroma subsampling on, ingot is **1.3% behind JPEG** at equal PSNR. Still behind WebP (+15%), JPEG XL (+34%), and AVIF (+159%).
+- **Ahead of JPEG on PSNR** — **−1.0% BD-rate** at equal quality. Still behind WebP (+17%), JPEG XL (+31%), and AVIF (+138%), and behind JPEG on SSIM (+7.9%).
 
 ```console
 $ sh build.sh
@@ -38,12 +38,12 @@ Eight axes, measured. Numbers are from 8 images of the AOM common test set, 6 qu
 | Parallelism | **done** | Group size 64 → 1024 changes file size by 1.4%, quality unchanged |
 | Simplicity | **budgeted** | Decoder core under 1,500 lines, 0 external deps, spec under 10 pages |
 | Patent freedom | expired art only | DCT (1974), Golomb (1966), Rice (1979). **No legal review yet** |
-| Compression ratio | **JPEG parity** | 4:4:4 — JPEG +7.4%, WebP +20.1%, JXL +39.3%, AVIF +147.7%<br>4:2:0 — JPEG **+1.3%**, WebP +15.2%, JXL +33.5%, AVIF +159.3% |
+| Compression ratio | **past JPEG on PSNR** | PSNR — JPEG **−1.0%**, WebP +16.9%, JXL +30.9%, AVIF +137.7%<br>SSIM — JPEG +7.9%, WebP +38.8%, JXL +67.5%, AVIF +149.9% |
 | Encode speed | not claimed | Currently faster, but only because it compresses less |
 | Decode speed | not measured | |
 | Generality | partially measured | Photos, screenshots, AI-generated images, game sprites |
 
-Chroma subsampling (4:2:0) is off by default. Turning it on saves 10.2% (PSNR) / 13.2% (SSIM) on photos, but costs **8.5 dB on screenshots** — colored text edges collapse. Pass `1` as the fifth argument to enable it.
+Chroma subsampling (4:2:0) is off by default and **now measures as a slight loss** (+1.3% vs +(−1.0%) on PSNR). Once 16×16 blocks handle flat chroma efficiently, halving the resolution stops paying for itself. It stays as an option because it still shrinks files where decode simplicity matters — but it costs **8.5 dB on screenshots**, so never turn it on for text or UI.
 
 ### On our own material
 
@@ -51,10 +51,10 @@ Measured the same way on 12 images we actually produce — AI-generated images, 
 
 | vs | PSNR BD-rate | SSIM BD-rate |
 |---|---|---|
-| JPEG | **−4.0%** | +6.4% |
-| WebP | +40.8% | +42.7% |
-| JPEG XL | +34.1% | +52.1% |
-| AVIF | +251.9% | +245.1% |
+| JPEG | **−7.7%** | +8.4% |
+| WebP | +32.6% | +39.5% |
+| JPEG XL | +13.3% | +42.5% |
+| AVIF | +228.3% | +244.2% |
 
 Negative means ingot spends fewer bits at equal quality. The two metrics disagree on JPEG, which is exactly the kind of disagreement worth reporting rather than picking the flattering one.
 
@@ -64,7 +64,7 @@ Four things every mature codec has are deliberately absent, so that each one can
 
 1. ~~Intra prediction~~ — **added 2026-08-21.** Four modes (DC, vertical, horizontal, plane), 2 bits per block, encoder reconstructs like the decoder. Worth −34.4% PSNR.
 2. **Perceptual quantization weighting** — measured at 0 gain in this codec so far; see the note below.
-3. **Larger and variable block sizes** — fixed 8×8.
+3. ~~Larger and variable block sizes~~ — **added 2026-08-21.** Each 16×16 macro is coded either whole or as four 8×8 blocks, chosen by actual bits and distortion. Worth about 8%.
 4. **Arithmetic coding** — adaptive Golomb-Rice instead, which is simpler to debug.
 
 What has been measured so far, each added one at a time:
@@ -78,6 +78,7 @@ What has been measured so far, each added one at a time:
 | Chroma subsampling (optional) | −10.2% | −13.2% |
 | Intra prediction, 4 modes | **−34.4%** | **−21.0%** |
 | Adaptive coding of the block header | −49% file size at q40, −58% at q63 | |
+| Variable block size + rate-distortion mode choice | ≈ −8% (crossed JPEG) | |
 
 Two findings worth recording. **Run-length coding made things worse** — low-frequency coefficients are rarely zero, so "skipped zeros = 0" costs an extra bit on almost every nonzero value. And **high-frequency quantization weighting measured as pure loss under both PSNR and SSIM**, which is why it is set to 0; JPEG's quantization tables were tuned against human viewers, not against these metrics.
 

@@ -18,6 +18,7 @@ void ingot_bw_init(ingot_bw *w, uint8_t *buf, size_t cap)
     w->acc = 0;
     w->nbits = 0;
     w->overflow = 0;
+    w->written_bits = 0;
 }
 
 static void ingot_bw_flush_byte(ingot_bw *w)
@@ -34,6 +35,7 @@ void ingot_bw_put(ingot_bw *w, uint32_t value, int nbits)
 {
     int i;
     if (nbits <= 0) return;
+    w->written_bits += (uint32_t)nbits;
     for (i = nbits - 1; i >= 0; i--) {
         uint32_t bit = (value >> i) & 1u;
         w->acc |= bit << (31 - w->nbits);

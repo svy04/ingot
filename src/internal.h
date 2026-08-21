@@ -16,16 +16,22 @@
 #define INGOT_HEADER_SIZE  24
 #define INGOT_TOC_ENTRY    8
 #define INGOT_BLOCK        8
-#define INGOT_FWD_SHIFT   14
-#define INGOT_INV_SHIFT   18
+#define INGOT_BLOCK16     16
+#define INGOT_FWD_SHIFT8  14
+#define INGOT_INV_SHIFT8  18
+#define INGOT_FWD_SHIFT16 15
+#define INGOT_INV_SHIFT16 17
 
 /* ---- 변환 (transform.c) ---- */
 extern const int16_t ingot_dct8[8][8];
-extern const uint8_t ingot_zigzag[64];
+extern const int16_t ingot_dct16[16][16];
+extern const uint16_t ingot_zz8[64];
 
-/* src 는 -128..127 로 옮긴 8x8 블록(행 우선, stride 지정). dst 는 계수 64개. */
-void ingot_fdct8x8(const int16_t *src, int src_stride, int16_t *dst);
-void ingot_idct8x8(const int16_t *src, int16_t *dst, int dst_stride);
+const uint16_t *ingot_zigzag_of(int n);
+
+/* n 은 8 또는 16 이다. src 는 잔차 블록(행 우선, stride 지정). */
+void ingot_fdct(const int16_t *src, int src_stride, int16_t *dst, int n);
+void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n);
 
 /* ---- 인트라 예측 (predict.c) ---- */
 #define INGOT_PRED_DC     0
@@ -35,16 +41,17 @@ void ingot_idct8x8(const int16_t *src, int16_t *dst, int dst_stride);
 #define INGOT_PRED_COUNT  4
 
 typedef struct {
-    int top[8], left[8], topleft;
+    int n;                      /* 블록 한 변. 8 또는 16 */
+    int top[16], left[16], topleft;
     int has_top, has_left, has_topleft;
 } ingot_neighbors;
 
 /* recon 은 지금까지 복원된 평면이다. gx0·gy0 는 조각의 원점이라
  * 그보다 위·왼쪽은 이웃으로 쓰지 않는다. */
 void ingot_gather_neighbors(const uint8_t *recon, int pw, int ph,
-                            int bx, int by, int gx0, int gy0,
-                            ingot_neighbors *n);
-void ingot_predict(const ingot_neighbors *n, int mode, int16_t *pred);
+                            int bx, int by, int gx0, int gy0, int n,
+                            ingot_neighbors *nb);
+void ingot_predict(const ingot_neighbors *nb, int mode, int16_t *pred);
 
 /* ---- 색 (color.c) ---- */
 void ingot_rgb_to_ycbcr(const uint8_t *rgb, int count,
@@ -95,9 +102,9 @@ static inline int ingot_dequantize(int level, int step)
 #define INGOT_QW_CHROMA 20
 #endif
 
-static inline int ingot_qstep_at(int base, int idx, int plane)
+static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 {
-    int u = idx & 7, v = idx >> 3;
+    int u = idx % n, v = idx / n;
     int s = (base * (16 + INGOT_QW_ALPHA * (u + v))) >> 4;
     if (plane) s = (s * INGOT_QW_CHROMA) >> 4;
     return s < 1 ? 1 : s;
@@ -121,10 +128,12 @@ static inline void ingot_ctx_reset(ingot_ctx *c)
     for (i = 0; i < INGOT_CTX_COUNT; i++) { c[i].sum = 4; c[i].cnt = 1; }
 }
 
-/* 지그재그 자리와 평면으로 무리를 고른다. */
-static inline int ingot_ctx_index(int k, int plane)
+/* 지그재그 자리와 평면으로 무리를 고른다.
+ * 블록 크기가 달라도 같은 무리를 쓰도록 자리를 64칸 눈금으로 옮긴다. */
+static inline int ingot_ctx_index(int k, int n, int plane)
 {
-    int band = (k == 0) ? 0 : (k <= 5) ? 1 : (k <= 20) ? 2 : 3;
+    int kk = (n == 8) ? k : (k * 64) / (n * n);
+    int band = (kk == 0) ? 0 : (kk <= 5) ? 1 : (kk <= 20) ? 2 : 3;
     return band + (plane ? 4 : 0);
 }
 
@@ -157,6 +166,7 @@ typedef struct {
     uint32_t acc;      /* 상위 비트부터 채운다 */
     int      nbits;    /* acc 안의 유효 비트 수 */
     int      overflow; /* 1 이면 버퍼 부족 */
+    uint32_t written_bits;  /* 지금까지 쓴 비트 수. 시험 인코딩에서 비용을 잴 때 쓴다 */
 } ingot_bw;
 
 void ingot_bw_init(ingot_bw *w, uint8_t *buf, size_t cap);

@@ -5,6 +5,9 @@
  *
  * 인코더는 디코더와 **같은 복원 화소**를 본다. 인트라 예측을 넣은 뒤로는
  * 그러지 않으면 다음 블록의 예측이 어긋난다.
+ *
+ * 16x16 묶음마다 "한 덩어리로 담을지, 8x8 넷으로 나눌지"를 고른다.
+ * 고르는 잣대는 실제 비트 수와 왜곡을 함께 본 값이다.
  */
 #include <stdlib.h>
 #include "internal.h"
@@ -17,20 +20,20 @@ void ingot_encode_options_default(ingot_encode_options *opt)
     opt->subsample = 0;
 }
 
-/* 평면에서 8x8 블록을 뽑는다. 이미지 밖은 가장자리 화소를 복제한다. */
+/* 평면에서 n x n 블록을 뽑는다. 평면 밖은 가장자리 화소를 복제한다. */
 static void fetch_block(const uint8_t *plane, int pw, int ph,
-                        int bx, int by, int16_t *out)
+                        int bx, int by, int n, int16_t *out)
 {
     int y, x;
-    for (y = 0; y < 8; y++) {
+    for (y = 0; y < n; y++) {
         int sy = by + y;
         if (sy >= ph) sy = ph - 1;
         if (sy < 0) sy = 0;
-        for (x = 0; x < 8; x++) {
+        for (x = 0; x < n; x++) {
             int sx = bx + x;
             if (sx >= pw) sx = pw - 1;
             if (sx < 0) sx = 0;
-            out[y * 8 + x] = (int16_t)plane[(size_t)sy * pw + sx];
+            out[y * n + x] = (int16_t)plane[(size_t)sy * pw + sx];
         }
     }
 }
@@ -53,33 +56,36 @@ static void downsample(const uint8_t *src, int sw, int sh,
 
 /* 복원 블록을 평면에 쓴다. 평면 밖은 버린다. */
 static void store_recon(uint8_t *recon, int pw, int ph,
-                        int bx, int by, const int16_t *blk)
+                        int bx, int by, int n, const int16_t *blk)
 {
     int y, x;
-    for (y = 0; y < 8; y++) {
+    for (y = 0; y < n; y++) {
         int dy = by + y;
         if (dy < 0 || dy >= ph) continue;
-        for (x = 0; x < 8; x++) {
+        for (x = 0; x < n; x++) {
             int dx = bx + x;
             if (dx < 0 || dx >= pw) continue;
             recon[(size_t)dy * pw + dx] =
-                (uint8_t)ingot_clamp_u8((int)blk[y * 8 + x]);
+                (uint8_t)ingot_clamp_u8((int)blk[y * n + x]);
         }
     }
 }
 
-/* 잔차를 양자화해 쓰고, 같은 값으로 복원 블록을 만든다. */
-static void code_residual(ingot_bw *w, const int16_t *resid, int base, int plane,
-                          ingot_ctx *ctx, const int16_t *pred, int16_t *recon)
+/* 양자화까지 한 계수를 담고, 같은 값으로 복원 블록을 만든다.
+ * w 가 NULL 이면 비트를 세기만 하고 아무것도 쓰지 않는다(시험 인코딩). */
+static void code_residual(ingot_bw *w, const int16_t *resid, int base, int n,
+                          int plane, ingot_ctx *ctx,
+                          const int16_t *pred, int16_t *recon)
 {
-    int16_t coef[64], z[64], deq[64], back[64];
-    int k, last = 0;
+    int16_t coef[256], z[256], deq[256], back[256];
+    const uint16_t *zz = ingot_zigzag_of(n);
+    int total = n * n, k, last = 0;
 
-    ingot_fdct8x8(resid, 8, coef);
+    ingot_fdct(resid, n, coef, n);
 
-    for (k = 0; k < 64; k++) {
-        int idx = ingot_zigzag[k];
-        int step = ingot_qstep_at(base, idx, plane);
+    for (k = 0; k < total; k++) {
+        int idx = zz[k];
+        int step = ingot_qstep_at(base, idx, n, plane);
         int level = ingot_quantize(coef[idx], step);
         z[k] = (int16_t)level;
         if (level != 0) last = k + 1;
@@ -87,67 +93,164 @@ static void code_residual(ingot_bw *w, const int16_t *resid, int base, int plane
 
     ingot_bw_put_rice_u(w, (uint32_t)last, &ctx[ingot_ctx_last(plane)]);
     for (k = 0; k < last; k++)
-        ingot_bw_put_rice(w, z[k], &ctx[ingot_ctx_index(k, plane)]);
+        ingot_bw_put_rice(w, z[k], &ctx[ingot_ctx_index(k, n, plane)]);
 
-    /* 디코더와 같은 값으로 되돌린다. */
-    for (k = 0; k < 64; k++) {
-        int idx = ingot_zigzag[k];
-        int step = ingot_qstep_at(base, idx, plane);
+    for (k = 0; k < total; k++) {
+        int idx = zz[k];
+        int step = ingot_qstep_at(base, idx, n, plane);
         int v = (k < last) ? ingot_dequantize(z[k], step) : 0;
         if (v >  32767) v =  32767;
         if (v < -32768) v = -32768;
         deq[idx] = (int16_t)v;
     }
-    ingot_idct8x8(deq, back, 8);
-    for (k = 0; k < 64; k++)
+    ingot_idct(deq, back, n, n);
+    for (k = 0; k < total; k++)
         recon[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
 }
 
-/* 잔차의 절대합. 모드를 고르는 잣대다. 율왜곡 최적화는 아직 아니다. */
-static int residual_cost(const int16_t *src, const int16_t *pred)
+/* 복원과 원본의 제곱 오차. 분할을 고를 때 쓴다. */
+static int64_t block_distortion(const int16_t *a, const int16_t *b, int total)
 {
-    int i, s = 0;
-    for (i = 0; i < 64; i++) {
-        int d = (int)src[i] - (int)pred[i];
-        s += (d < 0) ? -d : d;
+    int64_t s = 0;
+    int i;
+    for (i = 0; i < total; i++) {
+        int d = (int)a[i] - (int)b[i];
+        s += (int64_t)d * d;
     }
     return s;
 }
 
-/* 조각 하나의 한 평면을 쓴다. */
-static void write_plane_group(ingot_bw *w, const uint8_t *orig, uint8_t *recon,
-                              int pw, int ph, int ox, int oy, int gw, int gh,
-                              int base, int p, ingot_ctx *ctx)
+/* 블록 하나를 네 모드로 시험해 가장 싼 것을 고르고 쓴다.
+ * w 가 버리는 통로면 비용만 재는 셈이 된다.
+ * cost 를 돌려준다 (왜곡 + lambda * 비트). */
+static int64_t code_block(ingot_bw *w, const uint8_t *orig, uint8_t *recon,
+                          int pw, int ph, int bx, int by, int gx0, int gy0,
+                          int n, int base, int plane, ingot_ctx *ctx,
+                          int64_t lambda)
 {
-    int by, bx, m;
-    for (by = 0; by < gh; by += 8) {
-        for (bx = 0; bx < gw; bx += 8) {
-            int16_t src[64], pred[64], best_pred[64], resid[64], out[64];
-            ingot_neighbors nb;
-            int best = INGOT_PRED_DC, best_cost = -1, k;
+    int16_t src[256], pred[256], best_pred[256], resid[256], out[256];
+    ingot_neighbors nb;
+    ingot_ctx trial_ctx[INGOT_CTX_COUNT];
+    ingot_bw trial;
+    uint8_t scratch[1];
+    int total = n * n, m, k, best = INGOT_PRED_DC;
+    int64_t best_cost = -1;
 
-            fetch_block(orig, pw, ph, ox + bx, oy + by, src);
-            ingot_gather_neighbors(recon, pw, ph, ox + bx, oy + by, ox, oy, &nb);
+    fetch_block(orig, pw, ph, bx, by, n, src);
+    ingot_gather_neighbors(recon, pw, ph, bx, by, gx0, gy0, n, &nb);
 
-            for (m = 0; m < INGOT_PRED_COUNT; m++) {
-                int cost;
-                ingot_predict(&nb, m, pred);
-                cost = residual_cost(src, pred);
-                if (best_cost < 0 || cost < best_cost) {
-                    best_cost = cost;
-                    best = m;
-                    for (k = 0; k < 64; k++) best_pred[k] = pred[k];
-                }
-            }
+    for (m = 0; m < INGOT_PRED_COUNT; m++) {
+        int64_t bits, dist, cost;
+        ingot_predict(&nb, m, pred);
+        for (k = 0; k < total; k++)
+            resid[k] = (int16_t)((int)src[k] - (int)pred[k]);
 
-            ingot_bw_put(w, (uint32_t)best, 2);
-            for (k = 0; k < 64; k++)
-                resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
+        /* 비트만 세는 시험 인코딩. 무리 상태는 사본으로 굴린다. */
+        memcpy(trial_ctx, ctx, sizeof(trial_ctx));
+        ingot_bw_init(&trial, scratch, 0);     /* 용량 0 = 세기만 한다 */
+        code_residual(&trial, resid, base, n, plane, trial_ctx, pred, out);
+        bits = (int64_t)trial.written_bits;
+        dist = block_distortion(src, out, total);
+        cost = dist + lambda * bits;
 
-            code_residual(w, resid, base, p, ctx, best_pred, out);
-            store_recon(recon, pw, ph, ox + bx, oy + by, out);
+        if (best_cost < 0 || cost < best_cost) {
+            best_cost = cost;
+            best = m;
+            for (k = 0; k < total; k++) best_pred[k] = pred[k];
         }
     }
+
+    /* 고른 모드로 쓴다. 모드 비트도 값에 넣는다. */
+    best_cost += lambda * 2;
+    ingot_bw_put(w, (uint32_t)best, 2);
+    for (k = 0; k < total; k++)
+        resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
+    code_residual(w, resid, base, n, plane, ctx, best_pred, out);
+    store_recon(recon, pw, ph, bx, by, n, out);
+    return best_cost;
+}
+
+/* 떠 둔 16x16 복원 화소를 되돌린다. */
+static void restore_patch(uint8_t *recon, int pw, int ph,
+                          int mx, int my, const uint8_t *patch)
+{
+    int y, x;
+    for (y = 0; y < 16; y++)
+        for (x = 0; x < 16; x++) {
+            int dy = my + y, dx = mx + x;
+            if (dy >= 0 && dy < ph && dx >= 0 && dx < pw)
+                recon[(size_t)dy * pw + dx] = patch[y * 16 + x];
+        }
+}
+
+/* 16x16 묶음 하나. 한 덩어리와 넷으로 나눈 것을 견주어 싼 쪽을 쓴다.
+ *
+ * 두 후보를 모두 '버리는 통로'에 써서 비용을 재고, 이긴 쪽만 진짜 통로에 쓴다.
+ * 그 사이 무리 상태와 복원 화소는 매번 되돌린다. */
+static void code_macro(ingot_bw *w, const uint8_t *orig, uint8_t *recon,
+                       int pw, int ph, int mx, int my, int gx0, int gy0,
+                       int base, int plane, ingot_ctx *ctx, int64_t lambda)
+{
+    ingot_ctx save[INGOT_CTX_COUNT], ctx16[INGOT_CTX_COUNT];
+    uint8_t patch[256];
+    uint8_t scratch[1];
+    ingot_bw trial;
+    int64_t cost16, cost8 = 0;
+    int i, y, x;
+
+    /* 복원 평면의 이 자리를 떠 둔다. */
+    for (y = 0; y < 16; y++)
+        for (x = 0; x < 16; x++) {
+            int dy = my + y, dx = mx + x;
+            patch[y * 16 + x] =
+                (dy < ph && dx < pw && dy >= 0 && dx >= 0)
+                ? recon[(size_t)dy * pw + dx] : 0;
+        }
+    memcpy(save, ctx, sizeof(save));
+
+    /* 후보 1: 16x16 하나 */
+    memcpy(ctx16, ctx, sizeof(ctx16));
+    ingot_bw_init(&trial, scratch, 0);
+    cost16 = code_block(&trial, orig, recon, pw, ph, mx, my, gx0, gy0,
+                        16, base, plane, ctx16, lambda) + lambda;
+    restore_patch(recon, pw, ph, mx, my, patch);
+
+    /* 후보 2: 8x8 넷. 앞 블록의 복원이 뒤 블록의 이웃이라 순서대로 굴려야 한다. */
+    memcpy(ctx, save, sizeof(save));
+    ingot_bw_init(&trial, scratch, 0);
+    for (i = 0; i < 4; i++) {
+        int bx = mx + (i & 1) * 8, by = my + (i >> 1) * 8;
+        cost8 += code_block(&trial, orig, recon, pw, ph, bx, by, gx0, gy0,
+                            8, base, plane, ctx, lambda);
+    }
+    cost8 += lambda;
+    restore_patch(recon, pw, ph, mx, my, patch);
+    memcpy(ctx, save, sizeof(save));
+
+    /* 이긴 쪽을 진짜로 쓴다. */
+    if (cost16 <= cost8) {
+        ingot_bw_put(w, 0, 1);
+        code_block(w, orig, recon, pw, ph, mx, my, gx0, gy0,
+                   16, base, plane, ctx, lambda);
+    } else {
+        ingot_bw_put(w, 1, 1);
+        for (i = 0; i < 4; i++) {
+            int bx = mx + (i & 1) * 8, by = my + (i >> 1) * 8;
+            code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
+                       8, base, plane, ctx, lambda);
+        }
+    }
+}
+
+static void write_plane_group(ingot_bw *w, const uint8_t *orig, uint8_t *recon,
+                              int pw, int ph, int ox, int oy, int gw, int gh,
+                              int base, int p, ingot_ctx *ctx, int64_t lambda)
+{
+    int my, mx;
+    for (my = 0; my < gh; my += 16)
+        for (mx = 0; mx < gw; mx += 16)
+            code_macro(w, orig, recon, pw, ph, ox + mx, oy + my, ox, oy,
+                       base, p, ctx, lambda);
 }
 
 ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
@@ -163,7 +266,8 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
     size_t cap, need, toc_off, data_off = 0;
     uint32_t gx_count, gy_count, group_count, gi;
     int gsize, quality, group_log2, sub, p;
-    int cw, ch;
+    int cw, ch, qbase;
+    int64_t lambda;
     ingot_status st = INGOT_OK;
 
     if (out) *out = NULL;
@@ -182,6 +286,12 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
     if (group_log2 > INGOT_GROUP_LOG2_MAX) group_log2 = INGOT_GROUP_LOG2_MAX;
     gsize = 1 << group_log2;
     sub = opt->subsample ? 1 : 0;
+    qbase = ingot_qstep(quality);
+
+    /* 왜곡과 비트를 견주는 무게. 양자화가 거칠수록 비트가 비싸진다.
+     * 계수는 관행값(0.85 * step^2)의 정수 근사다. */
+    lambda = ((int64_t)qbase * qbase * 87) / 100;
+    if (lambda < 1) lambda = 1;
 
     gx_count = ingot_groups_across(width, gsize);
     gy_count = ingot_groups_across(height, gsize);
@@ -265,10 +375,10 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
             ingot_ctx_reset(ctx);
 
             write_plane_group(&w, plane[0], recon[0], width, height,
-                              ox, oy, gw, gh, ingot_qstep(quality), 0, ctx);
+                              ox, oy, gw, gh, qbase, 0, ctx, lambda);
             for (p = 1; p < 3; p++)
                 write_plane_group(&w, plane[p], recon[p], cw, ch,
-                                  cox, coy, cgw, cgh, ingot_qstep(quality), p, ctx);
+                                  cox, coy, cgw, cgh, qbase, p, ctx, lambda);
 
             len = ingot_bw_finish(&w);
             if (w.overflow) { retry = 1; break; }
