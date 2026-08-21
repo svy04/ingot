@@ -92,11 +92,16 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
     }
 
     ingot_rc_put_uint(w, &probs[ingot_prob_of(ingot_ctx_last_n(plane, n))], (uint32_t)last);
-    for (k = 0; k < last; k++) {
-        int p1 = (k >= 1) ? ingot_abs_i(z[k - 1]) : 0;
-        int p2 = (k >= 2) ? ingot_abs_i(z[k - 2]) : 0;
-        int lvl = ingot_ctx_level(p1 + p2);
-        ingot_rc_put_int(w, &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))], z[k]);
+    {
+        int16_t placed[256];
+        for (k = 0; k < total; k++) placed[k] = 0;
+        for (k = 0; k < last; k++) {
+            int idx = zz[k];
+            int lvl = ingot_ctx_level(ingot_nb2d(placed, idx, n));
+            ingot_rc_put_int(w,
+                &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))], z[k]);
+            placed[idx] = z[k];
+        }
     }
 
     for (k = 0; k < total; k++) {

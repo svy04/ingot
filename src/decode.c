@@ -74,25 +74,25 @@ static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
 {
     int16_t deq[256];
     const uint16_t *zz = ingot_zigzag_of(n);
-    int total = n * n, k, prev1 = 0, prev2 = 0;
+    int total = n * n, k;
+    int16_t placed[256];
     uint32_t last;
 
     last = ingot_rc_get_uint(r, &probs[ingot_prob_of(ingot_ctx_last_n(plane, n))]);
     if (r->error) return 1;
     if (last > (uint32_t)total) return 1;
 
-    for (k = 0; k < total; k++) deq[k] = 0;
+    for (k = 0; k < total; k++) { deq[k] = 0; placed[k] = 0; }
 
     for (k = 0; k < (int)last; k++) {
         int idx = zz[k];
         int step = ingot_qstep_at(base, idx, n, plane);
-        int lvl = ingot_ctx_level(prev1 + prev2);
+        int lvl = ingot_ctx_level(ingot_nb2d(placed, idx, n));
         int level = ingot_rc_get_int(r, &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))]);
         int v;
         if (r->error) return 1;
         if (level > 32767 || level < -32768) return 1;
-        prev2 = prev1;
-        prev1 = ingot_abs_i(level);
+        placed[idx] = (int16_t)level;
         v = ingot_dequantize(level, step);
         if (v >  32767) v =  32767;
         if (v < -32768) v = -32768;
