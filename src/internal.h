@@ -69,10 +69,17 @@ static inline int ingot_qstep(int quality)
     return 1 + quality * 2 + (quality * quality) / 16;   /* 1 ~ 375 */
 }
 
+#ifndef INGOT_QROUND
+#define INGOT_QROUND 5      /* 16 분모. 8 = 그냥 반올림, 작을수록 0 쪽으로 기운다.
+                             * 5 가 재서 가장 좋았다 (2026-08-21, 표준 사진 8장) */
+#endif
+
 static inline int16_t ingot_quantize(int coef, int step)
 {
-    /* 0 을 향해 자르되 반올림을 넣는다. 인코더 전용이라 규격이 아니다. */
-    int half = step >> 1;
+    /* 0 을 향해 자르되 반올림을 넣는다. 인코더 전용이라 규격이 아니다.
+     * 반올림 자리를 절반보다 0 쪽으로 당기면(데드존) 작은 계수가 0 이 되어
+     * 비트를 아낀다. 그 대가로 왜곡이 조금 는다 — 어디가 이득인지 잰다. */
+    int half = (step * INGOT_QROUND) >> 4;
     int v = (coef >= 0) ? (coef + half) / step : -((-coef + half) / step);
     if (v >  32767) v =  32767;
     if (v < -32768) v = -32768;
