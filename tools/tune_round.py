@@ -5,7 +5,7 @@
 """
 import subprocess, sys, os, re
 
-CANDS = [0, 1]
+CANDS = [0, 1, 2]
 SRC = ("src/transform.c src/color.c src/predict.c src/bitio.c "
        "src/rangecoder.c src/encode.c src/decode.c tools/cli.c")
 
@@ -35,8 +35,8 @@ def measure(images):
             which = "psnr"
         elif "SSIM 기준" in line:
             which = "ssim"
-        elif "VMAF 기준" in line:
-            which = "vmaf"
+        elif "SSIMULACRA2 기준" in line:
+            which = "s2"
         m = re.match(r"\s+vs (\w+)\s+([-+][\d.]+)%", line)
         if m and which:
             got[which + ":" + m.group(1)] = float(m.group(2))
@@ -48,9 +48,9 @@ def main():
     for v in CANDS:
         build(v)
         g = measure(images)
-        print(NAME + " %3d | jpeg P %+6.2f S %+6.2f V %+6.2f | webp P %+6.2f S %+6.2f V %+6.2f"
-              % (v, g.get("psnr:jpeg", 0), g.get("ssim:jpeg", 0), g.get("vmaf:jpeg", 0),
-                 g.get("psnr:webp", 0), g.get("ssim:webp", 0), g.get("vmaf:webp", 0)))
+        print(NAME + " %3d | jpeg P %+6.2f S %+6.2f S2 %+6.2f | webp P %+6.2f S %+6.2f S2 %+6.2f"
+              % (v, g.get("psnr:jpeg", 0), g.get("ssim:jpeg", 0), g.get("s2:jpeg", 0),
+                 g.get("psnr:webp", 0), g.get("ssim:webp", 0), g.get("s2:webp", 0)))
         sys.stdout.flush()
 
 
