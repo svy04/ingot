@@ -91,8 +91,11 @@ static inline int ingot_qstep(int quality)
 }
 
 #ifndef INGOT_QROUND
-#define INGOT_QROUND 5      /* 16 분모. 8 = 그냥 반올림, 작을수록 0 쪽으로 기운다.
-                             * 5 가 재서 가장 좋았다 (2026-08-21, 표준 사진 8장) */
+#define INGOT_QROUND 6      /* 16 분모. 8 = 그냥 반올림, 작을수록 0 쪽으로 기운다.
+                             * 5 였다가 6 으로 올렸다. 인코더의 자 두 곳(머리말 비트
+                             * 눈금, λ 정밀도)을 고친 뒤 다시 재니 6 이 나았다:
+                             * PSNR -26.8% → -26.9%, SSIMULACRA2 -16.7% → -17.3%,
+                             * WebP 대비 -9.5% → -9.8% (2026-08-22, 6장) */
 #endif
 
 static inline int16_t ingot_quantize(int coef, int step)
