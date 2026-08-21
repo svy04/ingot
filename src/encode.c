@@ -112,6 +112,12 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
         recon[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
 }
 
+/* 왜곡 쪽 눈금. λ 를 정수로 들고 다니면 고품질에서 qbase 가 작아
+ * ((3*3*10)/1600) 처럼 0 으로 뭉개진다. 그러면 그 구간에서 율왜곡 판단이
+ * 통째로 죽는다. 왜곡을 이 배수만큼 키워 λ 에 소수 자리를 만들어 준다
+ * (2026-08-22 발견). */
+#define INGOT_RD_SCALE 256
+
 /* 복원과 원본의 제곱 오차. 분할을 고를 때 쓴다. */
 static int64_t block_distortion(const int16_t *a, const int16_t *b, int total)
 {
@@ -179,7 +185,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         code_residual(&trial, resid, base, n, plane, trial_p, pred, out, total);
         bits = (int64_t)trial.bits;
         dist = block_distortion(src, out, total);
-        cost = dist + lambda * bits;
+        cost = dist * INGOT_RD_SCALE + lambda * bits;
 
         if (best_cost < 0 || cost < best_cost) {
             best_cost = cost;
@@ -354,7 +360,8 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
 #ifndef INGOT_LAMBDA
 #define INGOT_LAMBDA 10
 #endif
-    lambda = ((int64_t)qbase * qbase * INGOT_LAMBDA) / (100 * INGOT_BIT_UNIT);
+    lambda = ((int64_t)qbase * qbase * INGOT_LAMBDA * INGOT_RD_SCALE)
+           / (100 * INGOT_BIT_UNIT);
     if (lambda < 1) lambda = 1;
 
     gx_count = ingot_groups_across(width, gsize);

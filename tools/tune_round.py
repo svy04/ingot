@@ -5,18 +5,19 @@
 """
 import subprocess, sys, os, re
 
-CANDS = [0, 8, 16, 32]
+CANDS = [4, 5, 6, 7]
 SRC = ("src/transform.c src/color.c src/predict.c src/bitio.c "
        "src/rangecoder.c src/encode.c src/decode.c tools/cli.c")
 
 
 NAME = os.environ.get("TUNE", "INGOT_QROUND")
+EXTRA = os.environ.get("EXTRA", "")
 
 
 def build(val):
     if os.path.exists("ingot.exe"):
         os.remove("ingot.exe")
-    cmd = ("gcc -std=c99 -O2 -D%s=%d -w " % (NAME, val)) + SRC + " -o ingot -lm"
+    cmd = ("gcc -std=c99 -O2 -D%s=%d %s -w " % (NAME, val, EXTRA)) + SRC + " -o ingot -lm"
     r = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT)
     if r.returncode:
