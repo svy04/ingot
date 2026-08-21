@@ -267,7 +267,10 @@ def main():
     nimg = 8
     if "--images" in args:
         nimg = int(args[args.index("--images") + 1])
-    images = sorted(os.path.join(DATA, f) for f in os.listdir(DATA)
+    data_dir = DATA
+    if "--data" in args:
+        data_dir = os.path.join(ROOT, args[args.index("--data") + 1])
+    images = sorted(os.path.join(data_dir, f) for f in os.listdir(data_dir)
                     if f.endswith(".ppm"))[:nimg]
     if not images:
         print("시험 이미지가 없다"); return 1

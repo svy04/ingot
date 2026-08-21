@@ -45,6 +45,19 @@ Eight axes, measured. Numbers are from 8 images of the AOM common test set, 6 qu
 
 Chroma subsampling (4:2:0) is off by default. Turning it on saves 10.2% (PSNR) / 13.2% (SSIM) on photos, but costs **8.5 dB on screenshots** — colored text edges collapse. Pass `1` as the fifth argument to enable it.
 
+### On our own material
+
+Measured the same way on 12 images we actually produce — AI-generated images, UI screenshots, and game sprites, 4 each:
+
+| vs | PSNR BD-rate | SSIM BD-rate |
+|---|---|---|
+| JPEG | **−4.0%** | +6.4% |
+| WebP | +40.8% | +42.7% |
+| JPEG XL | +34.1% | +52.1% |
+| AVIF | +251.9% | +245.1% |
+
+Negative means ingot spends fewer bits at equal quality. The two metrics disagree on JPEG, which is exactly the kind of disagreement worth reporting rather than picking the flattering one.
+
 ## Why the ratio is behind, on purpose
 
 Four things every mature codec has are deliberately absent, so that each one can be measured on its own instead of trusted from a paper:
