@@ -1,0 +1,27 @@
+# 빌드 산출물
+ingot
+ingot.exe
+*.o
+*.a
+*.exe
+build/
+
+# 시험 자료 — 용량이 커서 저장소에 넣지 않는다.
+# 표준 시험 세트는 media.xiph.org/video/aomctc/test_set/ 에서 받는다.
+testdata/
+ourdata/
+*.ppm
+*.y4m
+*.igt
+
+# 측정 결과
+tools/*.json
+
+# 편집기
+.vscode/
+.idea/
+*.swp
+
+# 파이썬 캐시
+__pycache__/
+*.pyc
