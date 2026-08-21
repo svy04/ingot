@@ -69,15 +69,15 @@ ingot_status ingot_probe(const uint8_t *data, size_t size, int *width, int *heig
 }
 
 /* 잔차 블록 하나를 읽어 역변환까지 한다. 규격을 벗어나면 0 이 아닌 값을 돌려준다. */
-static int read_residual(ingot_br *r, int base, int n, int plane,
-                         ingot_ctx *ctx, int16_t *back)
+static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
+                         uint16_t *probs, int16_t *back)
 {
     int16_t deq[256];
     const uint16_t *zz = ingot_zigzag_of(n);
-    int total = n * n, k;
+    int total = n * n, k, prev1 = 0, prev2 = 0;
     uint32_t last;
 
-    last = ingot_br_get_rice_u(r, &ctx[ingot_ctx_last(plane)]);
+    last = ingot_rc_get_uint(r, &probs[ingot_prob_of(ingot_ctx_last(plane))]);
     if (r->error) return 1;
     if (last > (uint32_t)total) return 1;
 
@@ -86,10 +86,13 @@ static int read_residual(ingot_br *r, int base, int n, int plane,
     for (k = 0; k < (int)last; k++) {
         int idx = zz[k];
         int step = ingot_qstep_at(base, idx, n, plane);
-        int level = ingot_br_get_rice(r, &ctx[ingot_ctx_index(k, n, plane)]);
+        int lvl = ingot_ctx_level(prev1 + prev2);
+        int level = ingot_rc_get_int(r, &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))]);
         int v;
         if (r->error) return 1;
         if (level > 32767 || level < -32768) return 1;
+        prev2 = prev1;
+        prev1 = ingot_abs_i(level);
         v = ingot_dequantize(level, step);
         if (v >  32767) v =  32767;
         if (v < -32768) v = -32768;
@@ -117,22 +120,26 @@ static void store_block(uint8_t *plane, int pw, int ph,
     }
 }
 
-static int read_block(ingot_br *r, uint8_t *plane, int pw, int ph,
+static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                       int bx, int by, int gx0, int gy0, int n,
-                      int base, int p, ingot_ctx *ctx)
+                      int base, int p, uint16_t *probs)
 {
     int16_t pred[256], back[256], out[256];
     ingot_neighbors nb;
     uint32_t mode;
     int total = n * n, k;
 
-    mode = ingot_br_get(r, 2);
+    {
+        int hi = ingot_rc_dec_bit(r, &probs[INGOT_PROB_MODE + 0]);
+        int lo = ingot_rc_dec_bit(r, &probs[INGOT_PROB_MODE + 1 + hi]);
+        mode = (uint32_t)((hi << 1) | lo);
+    }
     if (r->error) return 1;
 
     ingot_gather_neighbors(plane, pw, ph, bx, by, gx0, gy0, n, &nb);
     ingot_predict(&nb, (int)mode, pred);
 
-    if (read_residual(r, base, n, p, ctx, back)) return 1;
+    if (read_residual(r, base, n, p, probs, back)) return 1;
 
     for (k = 0; k < total; k++)
         out[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
@@ -140,24 +147,24 @@ static int read_block(ingot_br *r, uint8_t *plane, int pw, int ph,
     return 0;
 }
 
-static int read_plane_group(ingot_br *r, uint8_t *plane, int pw, int ph,
+static int read_plane_group(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                             int ox, int oy, int gw, int gh,
-                            int base, int p, ingot_ctx *ctx)
+                            int base, int p, uint16_t *probs)
 {
     int my, mx, i;
     for (my = 0; my < gh; my += 16) {
         for (mx = 0; mx < gw; mx += 16) {
-            uint32_t split = ingot_br_get(r, 1);
+            uint32_t split = (uint32_t)ingot_rc_dec_bit(r, &probs[INGOT_PROB_SPLIT]);
             if (r->error) return 1;
             if (!split) {
                 if (read_block(r, plane, pw, ph, ox + mx, oy + my,
-                               ox, oy, 16, base, p, ctx)) return 1;
+                               ox, oy, 16, base, p, probs)) return 1;
             } else {
                 for (i = 0; i < 4; i++) {
                     int bx = ox + mx + (i & 1) * 8;
                     int by = oy + my + (i >> 1) * 8;
                     if (read_block(r, plane, pw, ph, bx, by,
-                                   ox, oy, 8, base, p, ctx)) return 1;
+                                   ox, oy, 8, base, p, probs)) return 1;
                 }
             }
         }
@@ -222,8 +229,8 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         int csize = h.sub ? (h.gsize >> 1) : h.gsize;
         int cox = h.sub ? (ox >> 1) : ox, coy = h.sub ? (oy >> 1) : oy;
         int cgw, cgh;
-        ingot_br r;
-        ingot_ctx ctx[INGOT_CTX_COUNT];
+        ingot_rc_dec r;
+        uint16_t probs[INGOT_PROB_COUNT];
 
         if (off < h.data_min || (uint64_t)off + len > (uint64_t)size) {
             st = INGOT_ERR_TOC; goto done;
@@ -233,16 +240,16 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         cgw = h.cw - cox; if (cgw > csize) cgw = csize;
         cgh = h.ch - coy; if (cgh > csize) cgh = csize;
 
-        ingot_br_init(&r, data + off, len);
-        ingot_ctx_reset(ctx);
+        ingot_rc_dec_init(&r, data + off, len);
+        ingot_prob_reset(probs, INGOT_PROB_COUNT);
 
         if (read_plane_group(&r, plane[0], h.width, h.height, ox, oy, gw, gh,
-                             qbase, 0, ctx)) {
+                             qbase, 0, probs)) {
             st = INGOT_ERR_BITSTREAM; goto done;
         }
         for (p = 1; p < 3; p++) {
             if (read_plane_group(&r, plane[p], h.cw, h.ch, cox, coy, cgw, cgh,
-                                 qbase, p, ctx)) {
+                                 qbase, p, probs)) {
                 st = INGOT_ERR_BITSTREAM; goto done;
             }
         }

@@ -26,7 +26,7 @@ METRIC = "ssim" if "--ssim" in sys.argv else "psnr"
 def build(alpha, chroma):
     cmd = ("gcc -std=c99 -O2 -w -DINGOT_QW_ALPHA=%d -DINGOT_QW_CHROMA=%d "
            "src/transform.c src/color.c src/predict.c src/bitio.c "
-           "src/encode.c src/decode.c tools/cli.c -o ingot -lm" % (alpha, chroma))
+           "src/rangecoder.c src/encode.c src/decode.c tools/cli.c -o ingot -lm" % (alpha, chroma))
     r = subprocess.run(cmd, shell=True, cwd=ROOT, capture_output=True, text=True)
     if r.returncode != 0:
         print("   빌드 실패:", (r.stderr or "")[:200])

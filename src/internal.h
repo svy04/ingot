@@ -113,7 +113,7 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 /* ---- 적응형 부호화 무리 ----
  * 자리마다 통계가 다르므로 무리를 나누고 무리마다 라이스 파라미터를 스스로 맞춘다.
  * 인코더와 디코더가 같은 순서로 같은 갱신을 하므로 상태가 어긋나지 않는다. */
-#define INGOT_CTX_COUNT 10
+#define INGOT_CTX_COUNT 26   /* 대역 4 x 이웃 3 x 평면 2, 거기에 last 2 */
 #define INGOT_RICE_MAX  20
 #define INGOT_ESCAPE_Q  24
 
@@ -130,17 +130,28 @@ static inline void ingot_ctx_reset(ingot_ctx *c)
 
 /* 지그재그 자리와 평면으로 무리를 고른다.
  * 블록 크기가 달라도 같은 무리를 쓰도록 자리를 64칸 눈금으로 옮긴다. */
-static inline int ingot_ctx_index(int k, int n, int plane)
+static inline int ingot_abs_i(int v) { return v < 0 ? -v : v; }
+
+/* 직전 계수 둘의 크기 합을 세 단계로 나눈다. 0 이면 뒤도 0 이기 쉽고,
+ * 컸으면 뒤도 크기 쉽다. 이 한 가지가 확률 모델을 크게 뾰족하게 만든다. */
+static inline int ingot_ctx_level(int prev_sum)
+{
+    /* 다섯 단계로 나눠 봤더니 오히려 나빠졌다 (2026-08-21). 무리가 늘면
+     * 무리마다 들어오는 표본이 줄어 확률이 늦게 자리를 잡는다. 셋이 맞다. */
+    return (prev_sum == 0) ? 0 : (prev_sum <= 2) ? 1 : 2;
+}
+
+static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
 {
     int kk = (n == 8) ? k : (k * 64) / (n * n);
     int band = (kk == 0) ? 0 : (kk <= 5) ? 1 : (kk <= 20) ? 2 : 3;
-    return band + (plane ? 4 : 0);
+    return (band * 3 + lvl) + (plane ? 12 : 0);
 }
 
 /* 블록 머리말(last) 전용 무리. */
 static inline int ingot_ctx_last(int plane)
 {
-    return 8 + (plane ? 1 : 0);
+    return 24 + (plane ? 1 : 0);
 }
 
 static inline int ingot_rice_param(const ingot_ctx *c)
@@ -156,6 +167,56 @@ static inline void ingot_ctx_update(ingot_ctx *c, uint32_t k)
     c->sum += k;
     c->cnt += 1;
     if (c->cnt >= 64) { c->sum >>= 1; c->cnt >>= 1; }
+}
+
+/* ---- 레인지 코더 (rangecoder.c) ----
+ * 골롬-라이스를 대신한다. 자리마다 "0인가"의 확률이 크게 달라서,
+ * 그 확률을 그대로 쓰는 편이 한 비트씩 쓰는 것보다 낫다. */
+
+/* 무리마다 모델 두 개(0보다 큰가 / 1보다 큰가)를 둔다.
+ * 거기에 분할 1개와 모드 3개를 더한다. */
+#define INGOT_PROB_PER_CTX 2
+#define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
+#define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + 1)
+#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 3)
+
+typedef struct {
+    uint8_t *buf;
+    size_t   cap, pos;
+    uint64_t low;
+    uint32_t range;
+    int      cache;
+    int64_t  cache_size;
+    int      overflow;
+    uint32_t bits;      /* 담은 비트 수의 어림값. 비용을 잴 때 쓴다 */
+} ingot_rc_enc;
+
+typedef struct {
+    const uint8_t *buf;
+    size_t   size, pos;
+    uint32_t range, code;
+    int      error;
+} ingot_rc_dec;
+
+void ingot_prob_reset(uint16_t *p, int count);
+
+void ingot_rc_enc_init(ingot_rc_enc *e, uint8_t *buf, size_t cap);
+void ingot_rc_enc_bit(ingot_rc_enc *e, uint16_t *prob, int bit);
+void ingot_rc_enc_bypass(ingot_rc_enc *e, uint32_t value, int nbits);
+size_t ingot_rc_enc_finish(ingot_rc_enc *e);
+void ingot_rc_put_uint(ingot_rc_enc *e, uint16_t *m, uint32_t k);
+void ingot_rc_put_int(ingot_rc_enc *e, uint16_t *m, int v);
+
+void ingot_rc_dec_init(ingot_rc_dec *d, const uint8_t *buf, size_t size);
+int  ingot_rc_dec_bit(ingot_rc_dec *d, uint16_t *prob);
+uint32_t ingot_rc_dec_bypass(ingot_rc_dec *d, int nbits);
+uint32_t ingot_rc_get_uint(ingot_rc_dec *d, uint16_t *m);
+int  ingot_rc_get_int(ingot_rc_dec *d, uint16_t *m);
+
+/* 무리 번호로 모델 두 개의 자리를 얻는다. */
+static inline int ingot_prob_of(int ctx)
+{
+    return ctx * INGOT_PROB_PER_CTX;
 }
 
 /* ---- 비트 쓰기 ---- */
