@@ -1,5 +1,7 @@
 # ingot
 
+![](docs/banner.png)
+
 A lossy image codec built to win on **several axes at once** — not just compression ratio.
 
 [한국어](README.ko.md)
