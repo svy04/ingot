@@ -178,6 +178,19 @@ static inline int ingot_abs_i(int v) { return v < 0 ? -v : v; }
 
 /* 직전 계수 둘의 크기 합을 세 단계로 나눈다. 0 이면 뒤도 0 이기 쉽고,
  * 컸으면 뒤도 크기 쉽다. 이 한 가지가 확률 모델을 크게 뾰족하게 만든다. */
+/* 자리 (u, v) 의 왼쪽·위·왼쪽위에 이미 담긴 계수의 크기를 모은다.
+ * 셋 다 지그재그 순서상 반드시 앞이라 디코더도 같은 값을 안다.
+ * lvl 은 자리별로 담긴 값을 그대로 둔 배열이다. */
+static inline int ingot_nb2d(const int16_t *lvl, int idx, int n)
+{
+    int u = idx % n, v = idx / n, s = 0;
+    if (u > 0)            s += lvl[idx - 1] < 0 ? -lvl[idx - 1] : lvl[idx - 1];
+    if (v > 0)            s += lvl[idx - n] < 0 ? -lvl[idx - n] : lvl[idx - n];
+    if (u > 0 && v > 0)   s += lvl[idx - n - 1] < 0 ? -lvl[idx - n - 1]
+                                                    : lvl[idx - n - 1];
+    return s;
+}
+
 static inline int ingot_ctx_level(int prev_sum)
 {
     /* 다섯 단계로 나눠 봤더니 오히려 나빠졌다 (2026-08-21). 무리가 늘면
