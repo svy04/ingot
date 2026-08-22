@@ -11,7 +11,7 @@ Most codecs trade one property for another. ingot picks the axes that were left 
 - **Ahead of JPEG and WebP on all three metrics** — against JPEG **−28.4%** (PSNR), **−26.3%** (SSIM), **−17.7%** (SSIMULACRA2) on standard photos; against WebP **−11.4%**, **−2.3%**, **−6.8%**. Ahead of JPEG XL on PSNR by **−6.6%**. AVIF is still ahead of us, by 33% on the perceptual metric.
 - **Bit-exact** — integer math only, zero floating-point operations in the library. The same input always produces the same bytes.
 - **Thread count never enters the bitstream** — any number of threads, identical bytes out. The price is real and grows as groups shrink: **2.7%** at the default 256, **29.7%** at 64, measured against one group per image (6 images, 6 quality steps). Tiling in existing standards costs 3.7–8%, so this is ahead only near the default.
-- **Small** — 2,312 lines of C99 in `src/`, of which 1,498 are on the decode path (including a 1.4 KB learned probability table). No dependencies beyond libc.
+- **Small** — 2,484 lines of C99 in `src/`, of which 1,638 are on the decode path. That count includes 160 lines of GPL notices and a 1.4 KB learned probability table; the code itself is 2,324 lines. No dependencies beyond libc.
 - **Hostile input is expected** — the decoder returns error codes, never crashes. 300 corrupted files, 0 abnormal exits.
 
 ```console
@@ -66,7 +66,7 @@ On this material ingot beats JPEG and WebP on all three metrics, and JPEG XL on 
 |---|---|---|
 | Determinism | **done** | Encoding twice gives identical bytes. 0 float ops in `src/` |
 | Parallelism | **in the format; the price is larger than first measured** | Against one group per image: 256 (default) **+2.7%**, 128 +9.8%, 64 **+29.7%** BD-rate. The 1.4% printed here until 2026-08-22 was measured before arithmetic coding, which resets the probability tables at every group boundary — small groups now have too few symbols to learn from. The encoder writes each group into its own slot, so an OpenMP build parallelizes it; this machine has no OpenMP runtime |
-| Simplicity | **budgeted, never benchmarked against anyone** | Decode path 1,498 lines, 2,312 total, 0 external deps, spec under 12 pages. No competitor has been measured on this axis |
+| Simplicity | **budgeted, never benchmarked against anyone** | Decode path 1,638 lines, 2,484 total (160 of them GPL notices), 0 external deps, spec under 12 pages. No competitor has been measured on this axis |
 | Patent freedom | expired art only | DCT (1974), Golomb (1966), arithmetic coding (late 1970s). **No legal review yet** |
 | Decode speed | **slowest of the five, and got slower** | Wall clock 0.178 s. Process startup alone is 0.059 s for ffmpeg and 0.028 s for our CLI; subtract it and the actual decode is 0.150 s vs JPEG 0.006, WebP 0.017, JXL 0.029, AVIF 0.041. The 2D context and the extra coefficient flags cost 0.08 s. This axis is going the wrong way and is not being paid for |
 | Encode speed | **behind** | 1.64 s vs JPEG 0.081, WebP 0.155, JXL 0.190. Faster than AVIF (6.49 s). The 2D coefficient context added 0.5 s |
@@ -126,4 +126,4 @@ Program output and both READMEs are English. Source comments, `SPEC.md`, and the
 
 ## License
 
-BSD 2-Clause. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE).

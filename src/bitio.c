@@ -1,3 +1,19 @@
+/* ingot — a lossy still-image codec.
+ * Copyright (C) 2026 svy04
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 /* bitio.c - 비트 단위 읽기와 쓰기, 그리고 지수 골롬 부호.
  *
  * 조각마다 새로 초기화한다. 조각 사이에 비트 상태가 흐르지 않는 것이

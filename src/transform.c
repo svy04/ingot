@@ -1,3 +1,19 @@
+/* ingot — a lossy still-image codec.
+ * Copyright (C) 2026 svy04
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 /* transform.c - 정수 DCT. 4x4, 8x8, 16x16 세 크기를 쓴다.
  *
  * 표는 DCT-II 를 256배 해서 반올림한 값이다. 규격의 일부이므로
