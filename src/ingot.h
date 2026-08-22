@@ -29,8 +29,8 @@
  *   - The decoder returns an error code for malformed input. It does not
  *     abort, and it does not read past the buffer you hand it.
  *
- * The comments in src/*.c are Korean; this header is English because it is
- * what a caller reads.
+ * Source comments are Korean; this header is English because it is what a
+ * caller reads.
  */
 #ifndef INGOT_H
 #define INGOT_H
