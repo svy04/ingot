@@ -1,3 +1,19 @@
+/* ingot — a lossy still-image codec.
+ * Copyright (C) 2026 svy04
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 /* predict.c - 인트라 예측. 인코더와 디코더가 똑같이 쓴다.
  *
  * 이미 복원된 이웃 화소로 블록을 미리 그려 보고, 원본에서 그것을 뺀 나머지만
