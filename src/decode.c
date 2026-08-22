@@ -24,7 +24,8 @@ static ingot_status parse_header(const uint8_t *d, size_t size, ingot_hdr *h)
     if (d[4] != INGOT_VERSION) return INGOT_ERR_VERSION;
     if (d[5] & 0xFCu) return INGOT_ERR_RESERVED;   /* 비트 2~7 은 0 이어야 한다 */
     if (d[5] & 0x01u) return INGOT_ERR_RESERVED;   /* v0 는 색공간 0 만 */
-    if (ingot_get32(d + 20) != 0) return INGOT_ERR_RESERVED;
+    /* 20번 자리는 목차와 데이터의 해시다. 값 자체는 여기서 안 보고,
+     * 파일 전체가 들어온 뒤 ingot_decode 가 대조한다. */
 
     h->sub = (d[5] & 0x02u) ? 1 : 0;
 
@@ -218,6 +219,37 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
     st = parse_header(data, size, &h);
     if (st != INGOT_OK) return st;
     qbase = ingot_qstep(h.quality);
+
+    /* 화소 버퍼를 잡기 전에 목차를 먼저 본다. 이걸 안 하면 1KB 짜리 파일이
+     * 65535x1524 를 주장해 600MB 를 물리게 할 수 있다. 남의 파일을 받는
+     * 곳에서는 그것이 곧 서비스 정지다 (2026-08-22 실측). */
+    {
+        size_t toc = INGOT_HEADER_SIZE;
+        uint64_t sum = 0;
+        uint32_t g;
+        if ((uint64_t)h.group_count * INGOT_TOC_ENTRY > (uint64_t)(size - toc))
+            return INGOT_ERR_TOC;
+        for (g = 0; g < h.group_count; g++) {
+            const uint8_t *e = data + toc + (size_t)g * INGOT_TOC_ENTRY;
+            uint32_t off = ingot_get32(e), len = ingot_get32(e + 4);
+            if ((uint64_t)off > (uint64_t)size) return INGOT_ERR_TOC;
+            if ((uint64_t)len > (uint64_t)size - off) return INGOT_ERR_TOC;
+            sum += len;
+        }
+        if (sum > (uint64_t)size) return INGOT_ERR_TOC;
+    }
+
+    /* 목차와 조각 데이터의 해시를 대조한다. 산술 부호화는 어떤 비트열도
+     * 그럴듯한 값으로 읽어 내므로, 이것이 없으면 망가진 파일이 조용히 딴
+     * 그림이 된다. 0 은 "해시 없음" 이라 지나간다. */
+    {
+        uint32_t want = ingot_get32(data + 20);
+        if (want != 0 && size > INGOT_HEADER_SIZE) {
+            uint32_t got = ingot_hash32(data + INGOT_HEADER_SIZE,
+                                        size - INGOT_HEADER_SIZE);
+            if (got != want) return INGOT_ERR_BITSTREAM;
+        }
+    }
 
     {
         size_t n = (size_t)h.width * (size_t)h.height;

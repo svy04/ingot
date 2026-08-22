@@ -56,8 +56,15 @@ def test_golden(tmp, update):
         if r.returncode != 0:
             fails.append("골든 인코딩 실패 %dx%d: %s" % (w, h, r.stderr.strip()))
             continue
-        cases.append("%dx%d q%d g%d %s %d" %
-                     (w, h, q, g, digest(dst), os.path.getsize(dst)))
+        # 인코딩 바이트만 잠그면 디코더를 통째로 망가뜨려도 안 잡힌다.
+        # 디코딩 결과의 화소까지 함께 잠근다.
+        out = os.path.join(tmp, "g_out.ppm")
+        r2 = sh([BIN, "dec", dst, out])
+        if r2.returncode != 0:
+            fails.append("골든 디코딩 실패 %dx%d: %s" % (w, h, r2.stderr.strip()))
+            continue
+        cases.append("%dx%d q%d g%d %s %d dec:%s" %
+                     (w, h, q, g, digest(dst), os.path.getsize(dst), digest(out)))
 
     if update or not os.path.exists(GOLDEN):
         with open(GOLDEN, "w", encoding="utf-8") as f:
@@ -88,24 +95,166 @@ def test_determinism(tmp):
         print("  결정성 통과")
 
 
+def read_ppm(path):
+    """P6 를 (w, h, 화소바이트) 로 읽는다."""
+    with open(path, "rb") as f:
+        assert f.readline().strip() == b"P6"
+        vals = []
+        while len(vals) < 3:
+            line = f.readline()
+            if line.startswith(b"#"):
+                continue
+            vals += [int(v) for v in line.split()]
+        return vals[0], vals[1], f.read()
+
+
+def psnr_of(a, b):
+    """두 화소 덩어리의 PSNR. 같으면 무한대 대신 999 를 준다."""
+    import math
+    n = min(len(a), len(b))
+    if n == 0:
+        return 0.0
+    se = 0
+    for i in range(n):
+        d = a[i] - b[i]
+        se += d * d
+    if se == 0:
+        return 999.0
+    return 10.0 * math.log10(255.0 * 255.0 * n / se)
+
+
 def test_roundtrip(tmp):
-    """크기가 8이나 조각 크기의 배수가 아닐 때도 크기가 보존되는가."""
+    """크기가 배수가 아닐 때도 크기와 **화소**가 보존되는가.
+
+    크기만 보면 디코더가 잔차를 통째로 버려도 통과한다. 그래서 화소를 읽어
+    PSNR 을 재고, 품질 설정이 보장하는 선 아래로 떨어지면 실패로 센다."""
     ok = 0
-    for (w, h) in ((1, 1), (7, 3), (8, 8), (65, 64), (129, 130), (300, 71)):
+    cases = [(1, 1, 10, 6, 0), (7, 3, 10, 6, 0), (8, 8, 10, 6, 0),
+             (65, 64, 10, 6, 0), (129, 130, 10, 6, 0), (300, 71, 10, 6, 0),
+             (120, 90, 0, 6, 0),      # 품질 최상
+             (120, 90, 63, 6, 0),     # 품질 최하
+             (300, 200, 10, 9, 0),    # 조각 큼
+             (300, 200, 10, 10, 0),   # 조각 최대
+             (120, 90, 10, 6, 1)]     # 색차 절반
+    for (w, h, q, g, sub) in cases:
+        tag = "%dx%d q%d g%d sub%d" % (w, h, q, g, sub)
         src = os.path.join(tmp, "r.ppm")
-        make_synthetic(src, w, h, seed=w + h)
+        make_synthetic(src, w, h, seed=w + h + q)
         enc = os.path.join(tmp, "r.igt")
         dec = os.path.join(tmp, "r_out.ppm")
-        if sh([BIN, "enc", src, enc, "10", "6"]).returncode != 0:
-            fails.append("왕복 인코딩 실패 %dx%d" % (w, h)); continue
+        if sh([BIN, "enc", src, enc, str(q), str(g), str(sub)]).returncode != 0:
+            fails.append("왕복 인코딩 실패 " + tag); continue
         if sh([BIN, "dec", enc, dec]).returncode != 0:
-            fails.append("왕복 디코딩 실패 %dx%d" % (w, h)); continue
-        with open(dec, "rb") as f:
-            head = f.readline() + f.readline()
-        if b"%d %d" % (w, h) not in head:
-            fails.append("왕복 크기 어긋남 %dx%d" % (w, h)); continue
+            fails.append("왕복 디코딩 실패 " + tag); continue
+        ow, oh, opix = read_ppm(dec)
+        if (ow, oh) != (w, h):
+            fails.append("왕복 크기 어긋남 " + tag); continue
+        _, _, spix = read_ppm(src)
+        if len(opix) != len(spix):
+            fails.append("왕복 화소 수 어긋남 " + tag); continue
+        # 이 선은 "화질이 좋은가"를 재는 자가 아니다. 시험 이미지마다 값이
+        # 다르므로 그런 자는 자기 채점이 된다. 여기서 잡으려는 것은 디코더가
+        # 통째로 망가진 경우다 — 잔차를 다 버리면 8.9 dB, 색차를 뒤바꾸면
+        # 20.3 dB 가 나온다. 정밀한 잠금은 골든 해시가 맡는다.
+        floor = 8.0
+        p = psnr_of(spix, opix)
+        if p < floor:
+            fails.append("왕복 화질 미달 %s: PSNR %.2f < %.1f" % (tag, p, floor))
+            continue
         ok += 1
-    print("  왕복 %d/6 통과" % ok)
+    print("  왕복 %d/%d 통과 (화소까지 확인)" % (ok, len(cases)))
+
+
+def put32(b, off, v):
+    b[off] = (v >> 24) & 0xFF
+    b[off + 1] = (v >> 16) & 0xFF
+    b[off + 2] = (v >> 8) & 0xFF
+    b[off + 3] = v & 0xFF
+
+
+def rehash(b):
+    """머리말을 고친 뒤 해시를 다시 맞춘다. 그래야 우리가 겨눈 규칙에서
+    걸리지, 해시에서 먼저 걸리지 않는다."""
+    h = 2166136261
+    for i in range(24, len(b)):
+        h ^= b[i]
+        h = (h * 16777619) & 0xFFFFFFFF
+    put32(b, 20, h if h else 1)
+
+
+def test_reject(tmp):
+    """거절 규칙마다 그 규칙만 어긋난 파일을 만들어 실제로 거절되는지 본다.
+
+    이것이 없으면 규칙을 통째로 지워도 시험이 초록이다. 실제로 2026-08-22 에
+    열 가지 중 여섯이 한 번도 안 돌고 있었다."""
+    src = os.path.join(tmp, "j.ppm")
+    make_synthetic(src, 100, 80, seed=11)
+    good = os.path.join(tmp, "j.igt")
+    if sh([BIN, "enc", src, good, "20", "6"]).returncode != 0:
+        fails.append("거절 시험용 인코딩 실패")
+        return
+    base = bytearray(open(good, "rb").read())
+    out = os.path.join(tmp, "j_out.ppm")
+    bad = os.path.join(tmp, "j_bad.igt")
+
+    def attempt(name, mutate, want):
+        b = bytearray(base)
+        mutate(b)
+        with open(bad, "wb") as f:
+            f.write(b)
+        r = sh([BIN, "dec", bad, out], timeout=30)
+        msg = (r.stdout + r.stderr).lower()
+        if r.returncode == 0:
+            fails.append("거절 안 함: %s" % name)
+            return 0
+        if want and want not in msg:
+            fails.append("거절 이유가 다름: %s (기대 '%s', 실제 '%s')"
+                         % (name, want, msg.strip()[:60]))
+            return 0
+        return 1
+
+    ok = 0
+    ok += attempt("1 시그니처", lambda b: b.__setitem__(0, 0x58), "signature")
+    ok += attempt("2 버전", lambda b: b.__setitem__(4, 9), "version")
+
+    def flip_reserved(b):
+        b[5] |= 0x40           # flags 의 예약 비트
+        rehash(b)
+    ok += attempt("3 예약 비트", flip_reserved, "reserved")
+
+    def zero_width(b):
+        put32(b, 8, 0)
+        rehash(b)
+    ok += attempt("5 폭 0", zero_width, "dimension")
+
+    def huge_width(b):
+        put32(b, 8, 70000)
+        rehash(b)
+    ok += attempt("5 폭 상한", huge_width, "dimension")
+
+    def bad_group_log2(b):
+        b[7] = 3               # 6 미만
+        rehash(b)
+    ok += attempt("6 조각 크기", bad_group_log2, "group")
+
+    def wrong_group_count(b):
+        put32(b, 16, 999)
+        rehash(b)
+    ok += attempt("7 조각 수", wrong_group_count, "")
+
+    ok += attempt("8 잘린 파일", lambda b: b.__delitem__(slice(len(b) // 2, None)),
+                  "")
+
+    def toc_outside(b):
+        put32(b, 24, 0x7FFFFFFF)   # 첫 조각이 파일 밖
+        rehash(b)
+    ok += attempt("8 목차가 밖", toc_outside, "")
+
+    def corrupt_group(b):
+        b[-5] ^= 0xFF              # 조각 데이터만 건드린다
+    ok += attempt("해시 대조", corrupt_group, "")
+
+    print("  거절 규칙 %d/10 통과" % ok)
 
 
 def test_corrupt(tmp):
@@ -118,9 +267,15 @@ def test_corrupt(tmp):
 
     rnd = random.Random(20260821)
     crashes = 0
+    silent = 0
     trials = 300
     out = os.path.join(tmp, "c_out.ppm")
     bad = os.path.join(tmp, "bad.igt")
+
+    # 정상 파일을 푼 결과. 손상본이 이것과 다른 그림을 내면 잡는다.
+    ref = os.path.join(tmp, "c_ref.ppm")
+    sh([BIN, "dec", good, ref])
+    good_digest = digest(ref)
 
     for i in range(trials):
         d = bytearray(data)
@@ -134,14 +289,26 @@ def test_corrupt(tmp):
             d = bytearray(rnd.randrange(256) for _ in range(rnd.randrange(1, 400)))
         with open(bad, "wb") as f:
             f.write(d)
+        if os.path.exists(out):
+            os.remove(out)
         r = sh([BIN, "dec", bad, out], timeout=30)
-        # 종료 코드 0 또는 1 은 정상 (성공 또는 거절). 그 밖은 크래시다.
         if r.returncode not in (0, 1):
             crashes += 1
             if crashes <= 3:
                 fails.append("손상 입력에서 비정상 종료 (코드 %d, 모드 %d)"
                              % (r.returncode, mode))
-    print("  손상 입력 %d건 중 비정상 종료 %d건" % (trials, crashes))
+            continue
+        # 여기가 요점이다. 거절(코드 1)은 정상이지만, 받아들였다면(코드 0)
+        # 그 결과가 정상 파일의 결과와 같아야 한다. 다르면 망가진 파일을
+        # 조용히 딴 그림으로 내놓은 것이고, 그것은 거절보다 나쁘다.
+        if r.returncode == 0 and os.path.exists(out):
+            if digest(out) != good_digest:
+                silent += 1
+                if silent <= 3:
+                    fails.append("손상 입력을 조용히 받아들여 다른 그림을 냈다 "
+                                 "(모드 %d, 사례 %d)" % (mode, i))
+    print("  손상 입력 %d건: 비정상 종료 %d건, 조용한 오답 %d건"
+          % (trials, crashes, silent))
 
 
 def main():
@@ -153,6 +320,7 @@ def main():
     test_determinism(tmp)
     test_roundtrip(tmp)
     test_golden(tmp, update)
+    test_reject(tmp)
     test_corrupt(tmp)
     print()
     if fails:

@@ -377,6 +377,21 @@ static inline uint32_t ingot_get32(const uint8_t *p)
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+/* 목차와 조각 데이터를 한 줄로 훑어 32비트 값을 만든다 (FNV-1a).
+ * 목적은 위조 방지가 아니라 우연한 손상 감지다. 산술 부호화는 어떤 비트열도
+ * 그럴듯한 값으로 읽어 내므로, 이것이 없으면 망가진 파일이 조용히 딴 그림이
+ * 된다 (2026-08-22 실측: 손상 300건 중 44건이 그림을 냈고 최악 11.55 dB). */
+static inline uint32_t ingot_hash32(const uint8_t *p, size_t n)
+{
+    uint32_t h = 2166136261u;
+    size_t i;
+    for (i = 0; i < n; i++) {
+        h ^= p[i];
+        h *= 16777619u;
+    }
+    return h ? h : 1u;      /* 0 은 "해시 없음" 으로 남겨 둔다 */
+}
+
 static inline int ingot_clamp_u8(int v)
 {
     if (v < 0) return 0;
