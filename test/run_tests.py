@@ -13,7 +13,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-BIN = os.path.join(ROOT, "ingot.exe" if os.name == "nt" else "ingot")
+# 실행 파일 이름은 INGOT_BIN 으로 갈아 끼울 수 있다. 고친 판을 본 빌드와
+# 나란히 시험하려면 서로 다른 파일이어야 한다.
+BIN = os.environ.get("INGOT_BIN") or os.path.join(
+    ROOT, "ingot.exe" if os.name == "nt" else "ingot")
 GOLDEN = os.path.join(HERE, "golden.txt")
 TESTDATA = os.path.join(ROOT, "testdata")
 

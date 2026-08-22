@@ -24,7 +24,10 @@ except ImportError:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-BIN = os.path.join(ROOT, "ingot.exe" if os.name == "nt" else "ingot")
+# 실행 파일 이름은 INGOT_BIN 으로 갈아 끼울 수 있다. 긴 측정이 도는 중에
+# 다른 빌드를 나란히 재려면 서로 다른 파일이어야 한다.
+BIN = os.environ.get("INGOT_BIN") or os.path.join(
+    ROOT, "ingot.exe" if os.name == "nt" else "ingot")
 DATA = os.path.join(ROOT, "testdata")
 QUALITIES = [1, 4, 10, 20, 36, 63]
 

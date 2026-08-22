@@ -40,7 +40,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-SRC = ("src/transform.c src/color.c src/predict.c src/bitio.c "
+SRC = ("src/transform.c src/color.c src/predict.c src/loopfilter.c "
        "src/rangecoder.c src/encode.c src/decode.c tools/cli.c")
 BIN = os.path.join(ROOT, "ingot.exe" if os.name == "nt" else "ingot")
 DUMP = os.path.join(ROOT, "probs.txt")

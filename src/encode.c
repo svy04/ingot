@@ -86,11 +86,17 @@ static void store_recon(uint8_t *recon, int pw, int ph,
     }
 }
 
+/* 왜곡 쪽 눈금. λ 를 정수로 들고 다니면 고품질에서 qbase 가 작아
+ * ((3*3*10)/1600) 처럼 0 으로 뭉개진다. 그러면 그 구간에서 율왜곡 판단이
+ * 통째로 죽는다. 왜곡을 이 배수만큼 키워 λ 에 소수 자리를 만들어 준다
+ * (2026-08-22 발견). */
+#define INGOT_RD_SCALE 256
+
 /* 양자화까지 한 계수를 담고, 같은 값으로 복원 블록을 만든다.
  * w 가 NULL 이면 비트를 세기만 하고 아무것도 쓰지 않는다(시험 인코딩). */
 static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n,
                           int plane, uint16_t *probs,
-                          const int16_t *pred, int16_t *recon, int cut)
+                          const int16_t *pred, int16_t *recon)
 {
     int16_t coef[256], z[256], deq[256], back[256];
     const uint16_t *zz = ingot_zigzag_of(n);
@@ -101,20 +107,31 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
     for (k = 0; k < total; k++) {
         int idx = zz[k];
         int step = ingot_qstep_at(base, idx, n, plane);
-        int level = (k < cut) ? ingot_quantize(coef[idx], step) : 0;
+        int level = ingot_quantize(coef[idx], step);
         z[k] = (int16_t)level;
         if (level != 0) last = k + 1;
     }
 
+#ifdef INGOT_BIT_STATS
+    ingot_bitplane = plane ? 1 : 0;
+    ingot_bitcat = INGOT_BC_LAST;
+#endif
     ingot_rc_put_uint(w, &probs[ingot_prob_of(ingot_ctx_last_n(plane, n))], (uint32_t)last);
+#ifdef INGOT_BIT_STATS
+    ingot_bitcat = INGOT_BC_ZERO;
+#endif
     {
         int16_t placed[256];
         for (k = 0; k < total; k++) placed[k] = 0;
         for (k = 0; k < last; k++) {
             int idx = zz[k];
             int lvl = ingot_ctx_level(ingot_nb2d(placed, idx, n));
-            ingot_rc_put_int(w,
-                &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))], z[k]);
+            /* k == last-1 이면 이 계수가 0 이 아닌 것을 디코더도 안다.
+             * last 가 「마지막 비영 계수의 다음 자리」이기 때문이다.
+             * 그 깃발을 안 적는다 (2026-08-23). */
+            ingot_rc_put_int_from(w,
+                &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))],
+                z[k], (k == last - 1) ? 1 : 0);
             placed[idx] = z[k];
         }
     }
@@ -131,12 +148,6 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
     for (k = 0; k < total; k++)
         recon[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
 }
-
-/* 왜곡 쪽 눈금. λ 를 정수로 들고 다니면 고품질에서 qbase 가 작아
- * ((3*3*10)/1600) 처럼 0 으로 뭉개진다. 그러면 그 구간에서 율왜곡 판단이
- * 통째로 죽는다. 왜곡을 이 배수만큼 키워 λ 에 소수 자리를 만들어 준다
- * (2026-08-22 발견). */
-#define INGOT_RD_SCALE 256
 
 /* 복원과 원본의 차이를 값으로 매긴다. 모드·분할을 고를 때 쓴다.
  *
@@ -197,7 +208,8 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     fetch_block(orig, pw, ph, bx, by, n, src);
     ingot_gather_neighbors(recon, pw, ph, bx, by, gx0, gy0, n, &nb);
 
-    /* 1단계: 잔차의 절대합으로 모드 순위를 매긴다. 담아 보지 않으므로 싸다. */
+
+    /* 1단계: 잔차의 절대합으로 후보 순위를 매긴다. 담아 보지 않으므로 싸다. */
     for (m = 0; m < INGOT_PRED_COUNT; m++) {
         int64_t sad = 0;
         ingot_predict(&nb, m, pred);
@@ -228,8 +240,18 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         /* 비트만 세는 시험 인코딩. 무리 상태는 사본으로 굴린다. */
         memcpy(trial_p, probs, sizeof(trial_p));
         ingot_rc_enc_init(&trial, scratch, 0);     /* 용량 0 = 세기만 한다 */
-        code_residual(&trial, resid, base, n, plane, trial_p, pred, out, total);
+        code_residual(&trial, resid, base, n, plane, trial_p, pred, out);
         bits = (int64_t)trial.bits;
+        /* 모드를 적는 값도 후보마다 다르다. 앞 블록과 같은 모드는 확률 모델이
+         * 이미 그쪽으로 기울어 있어 싸고, 드문 모드는 비싸다. 이것을 고른 뒤
+         * 상수로 더하면 후보 사이의 차이가 통째로 사라져, 모드 선택이 왜곡만
+         * 보고 결정된다 (2026-08-22). */
+        {
+            int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
+            int hi = (m >> 1) & 1;
+            bits += (int64_t)ingot_rc_price(probs[mo + 0], hi);
+            bits += (int64_t)ingot_rc_price(probs[mo + 1 + hi], m & 1);
+        }
         dist = block_distortion_n(src, out, total, n);
         cost = dist * INGOT_RD_SCALE + lambda * bits;
 
@@ -243,18 +265,23 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     for (k = 0; k < total; k++)
         resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
 
-    /* 고른 모드로 쓴다. 모드 비트도 값에 넣는다.
-     * 비트 수에 INGOT_BIT_UNIT 을 곱해야 code_residual 이 세는 값과 눈금이 맞는다.
-     * 이것을 빠뜨리면 머리말 비트가 실제의 1/16 로 매겨져, 인코더가 블록을
-     * 쪼개는 비용을 거의 공짜로 본다 (2026-08-22 발견). */
-    best_cost += lambda * 2 * INGOT_BIT_UNIT;
+    /* 고른 모드로 쓴다. 모드 값은 위 시험 루프에서 이미 best_cost 에 들어갔다. */
     {
-        int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
-        ingot_rc_enc_bit(w, &probs[mo + 0], (best >> 1) & 1);
-        ingot_rc_enc_bit(w, &probs[mo + 1 + ((best >> 1) & 1)], best & 1);
+#ifdef INGOT_BIT_STATS
+        ingot_bitplane = plane ? 1 : 0;
+        ingot_bitcat = INGOT_BC_MODE;
+#endif
+        {
+            int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
+            ingot_rc_enc_bit(w, &probs[mo + 0], (best >> 1) & 1);
+            ingot_rc_enc_bit(w, &probs[mo + 1 + ((best >> 1) & 1)], best & 1);
+        }
+#ifdef INGOT_BIT_STATS
+        ingot_bitcat = INGOT_BC_ZERO;
+#endif
         *pmode = best;
     }
-    code_residual(w, resid, base, n, plane, probs, best_pred, out, total);
+    code_residual(w, resid, base, n, plane, probs, best_pred, out);
     store_recon(recon, pw, ph, bx, by, n, out);
     return best_cost;
 }
@@ -291,6 +318,14 @@ static void restore_patch(uint8_t *recon, int pw, int ph,
  *
  * 두 후보를 모두 버리는 통로에 써서 비용을 재고, 이긴 쪽만 진짜 통로에 쓴다.
  * 그 사이 무리 상태와 복원 화소는 매번 되돌린다. */
+#ifdef INGOT_BIT_STATS
+#define BS_SPLIT_ON()  (ingot_bitplane = plane ? 1 : 0, ingot_bitcat = INGOT_BC_SPLIT)
+#define BS_SPLIT_OFF() (ingot_bitcat = INGOT_BC_ZERO)
+#else
+#define BS_SPLIT_ON()  ((void)0)
+#define BS_SPLIT_OFF() ((void)0)
+#endif
+
 static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                          int pw, int ph, int bx, int by, int gx0, int gy0,
                          int n, int base, int plane, uint16_t *probs,
@@ -303,6 +338,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     int64_t cost_whole, cost_split = 0;
     int i, h = n >> 1, sidx = (n == 16) ? 0 : 1;
     int save_pm, try_pm;
+
 
     if (n <= INGOT_MIN_BLOCK)
         return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
@@ -327,7 +363,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     if (cost_whole < lambda * INGOT_SPLIT_SKIP * INGOT_BIT_UNIT) {
         memcpy(probs, save, sizeof(save));
         *pmode = save_pm;
-        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0);
+        BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0); BS_SPLIT_OFF();
         return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
                           n, base, plane, probs, pmode, lambda)
              + lambda * INGOT_BIT_UNIT;
@@ -348,12 +384,12 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 
     /* 이긴 쪽을 진짜로 쓴다. */
     if (cost_whole <= cost_split) {
-        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0);
+        BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0); BS_SPLIT_OFF();
         return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
                           n, base, plane, probs, pmode, lambda)
              + lambda * INGOT_BIT_UNIT;
     }
-    ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1);
+    BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1); BS_SPLIT_OFF();
     cost_split = lambda * INGOT_BIT_UNIT;
     for (i = 0; i < 4; i++)
         cost_split += code_quad(w, orig, recon, pw, ph,
@@ -498,7 +534,9 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
         buf[0] = INGOT_SIG0; buf[1] = INGOT_SIG1;
         buf[2] = INGOT_SIG2; buf[3] = INGOT_SIG3;
         buf[4] = INGOT_VERSION;
-        buf[5] = (uint8_t)(sub ? 0x02 : 0x00);
+        /* 비트 2 = 블록 경계 필터. 디코더가 켜고 끄는 신호일 뿐, 인코더는
+         * 자기 복원 버퍼를 안 거른다 (예측이 필터 전 화소를 본다). */
+        buf[5] = (uint8_t)((sub ? 0x02 : 0x00) | (INGOT_LF ? 0x04 : 0x00));
         buf[6] = (uint8_t)quality;
         buf[7] = (uint8_t)group_log2;
         ingot_put32(buf + 8,  (uint32_t)width);

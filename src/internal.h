@@ -65,9 +65,14 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n);
 #define INGOT_PRED_COUNT  4
 
 /* 실제로 담아 보는 모드 수. 나머지는 잔차 절대합 순위에서 걸러진다.
- * 인코더만의 선택이라 규격이 아니다. */
+ * 인코더만의 선택이라 규격이 아니다.
+ *
+ * 2 였다가 4(전부)로 올렸다(2026-08-23). 절대합 순위는 담는 값을 모르므로
+ * 자주 틀린다 — 잔차가 조금 큰 모드가 확률 모델에서 훨씬 싸게 담기는 일이
+ * 흔하다. 넷을 다 담아 보니 세 지표가 함께 좋아졌다: PSNR -2.13%, SSIM
+ * -1.68%, SSIMULACRA2 -1.80%. 이 값은 인코딩 시간과 맞바꾸는 손잡이다. */
 #ifndef INGOT_MODE_TRIALS
-#define INGOT_MODE_TRIALS 2
+#define INGOT_MODE_TRIALS 4
 #endif
 
 /* 통째로 담는 값이 이 비트 수보다 싸면 나누는 쪽을 아예 재지 않는다.
@@ -170,7 +175,7 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 #define INGOT_CTX_BYSIZE 1
 #endif
 
-/* 계수 무리 = 크기 x 대역 4 x 이웃 3 x 평면 2, 거기에 last 6 */
+/* 계수 무리 = 크기 x 대역 4 x 이웃 INGOT_NBLEV x 평면 2, 거기에 last 6 */
 /* 이웃 크기 합을 몇 단계로 나눌지. 1차원 이웃이던 때는 셋이 맞았는데,
  * 2차원으로 바꾸면서 합의 범위가 세 배로 늘었으므로 다시 잰다. */
 #ifndef INGOT_NBLEV
@@ -180,26 +185,14 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 #define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 3 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
 #define INGOT_CTX_BASE  (INGOT_CTX_SIZES * 4 * INGOT_NBLEV * 2)
 #define INGOT_CTX_COUNT (INGOT_CTX_BASE + 6)
-#define INGOT_RICE_MAX  20
-#define INGOT_ESCAPE_Q  24
-
-typedef struct {
-    uint32_t sum;
-    uint32_t cnt;
-} ingot_ctx;
-
-static inline void ingot_ctx_reset(ingot_ctx *c)
-{
-    int i;
-    for (i = 0; i < INGOT_CTX_COUNT; i++) { c[i].sum = 4; c[i].cnt = 1; }
-}
-
 /* 지그재그 자리와 평면으로 무리를 고른다.
  * 블록 크기가 달라도 같은 무리를 쓰도록 자리를 64칸 눈금으로 옮긴다. */
 static inline int ingot_abs_i(int v) { return v < 0 ? -v : v; }
 
-/* 직전 계수 둘의 크기 합을 세 단계로 나눈다. 0 이면 뒤도 0 이기 쉽고,
- * 컸으면 뒤도 크기 쉽다. 이 한 가지가 확률 모델을 크게 뾰족하게 만든다. */
+/* 이웃 계수의 크기 합을 INGOT_NBLEV 단계로 나눈다. 0 이면 뒤도 0 이기 쉽고,
+ * 컸으면 뒤도 크기 쉽다. 이 한 가지가 확률 모델을 크게 뾰족하게 만든다.
+ * 처음에는 지그재그 순서상 직전 둘을 세 단계로 나눴는데, 2026-08-22 에
+ * 블록 안 자리 기준(왼쪽·위·왼쪽위 셋)으로 바꾸고 다섯 단계로 늘렸다. */
 /* 자리 (u, v) 의 왼쪽·위·왼쪽위에 이미 담긴 계수의 크기를 모은다.
  * 셋 다 지그재그 순서상 반드시 앞이라 디코더도 같은 값을 안다.
  * lvl 은 자리별로 담긴 값을 그대로 둔 배열이다. */
@@ -267,35 +260,69 @@ static inline int ingot_ctx_last_n(int plane, int n)
     return INGOT_CTX_BASE + sz * 2 + (plane ? 1 : 0);
 }
 
-static inline int ingot_rice_param(const ingot_ctx *c)
-{
-    int m = 0;
-    while (m < INGOT_RICE_MAX && ((uint64_t)c->cnt << m) < (uint64_t)c->sum)
-        m++;
-    return m;
-}
-
-static inline void ingot_ctx_update(ingot_ctx *c, uint32_t k)
-{
-    c->sum += k;
-    c->cnt += 1;
-    if (c->cnt >= 64) { c->sum >>= 1; c->cnt >>= 1; }
-}
-
 /* ---- 레인지 코더 (rangecoder.c) ----
  * 골롬-라이스를 대신한다. 자리마다 "0인가"의 확률이 크게 달라서,
  * 그 확률을 그대로 쓰는 편이 한 비트씩 쓰는 것보다 낫다. */
 
-/* 무리마다 모델 두 개(0보다 큰가 / 1보다 큰가)를 둔다.
- * 거기에 분할 1개와 모드 3개를 더한다. */
 /* 무리마다 두는 모델 수.
- *   0..4 : k > 0, k > 1, k > 2, k > 3, k > 4 다섯 깃발
- *   5..7 : 지수 골롬 접두부. 자리가 깊어질수록 뒤쪽 모델을 쓴다 */
+ *   0..2 : k > 0, k > 1, k > 2 세 깃발 (rangecoder.c 의 RC_FLAGS)
+ *   3..5 : 지수 골롬 접두부. 자리가 깊어질수록 뒤쪽 모델을 쓴다
+ *   6..7 : 안 쓴다. 깃발을 늘릴 자리로 남겨 둔 것이고, 3·5·8 을 재 보니
+ *          3 이 가장 좋았다 (2026-08-22)
+ * 무리 뒤에 분할 2개(16→8, 8→4)와 모드 12개(앞 블록 모드 4 × 트리 3)를 더한다. */
 #define INGOT_PROB_PER_CTX 8
 #define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
 #define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + 2)   /* 16->8 과 8->4, 둘 */
 /* 모드 비트는 앞 블록의 모드를 문맥으로 쓴다. 모드가 넷이므로 3 자리씩 넷. */
+/* 쓸 수 있는 모드가 둘뿐인 자리(조각의 맨 위 줄·맨 왼쪽 줄)는 한 비트로
+ * 끝난다. 그 비트의 뜻이 네 모드일 때의 첫 비트와 다르므로 자리를 따로 둔다. */
+/* ---- 블록 경계 필터 (loopfilter.c) ----
+ * 조각을 다 푼 뒤 그 조각 안에서만 돈다. 예측은 필터 전 화소를 보므로
+ * 인코더는 이 파일을 안 쓴다. 손잡이는 재서 정한다. */
+#define INGOT_LF_V 1        /* 이 4x4 칸의 왼쪽이 블록 경계다 */
+#define INGOT_LF_H 2        /* 이 4x4 칸의 위쪽이 블록 경계다 */
+#ifndef INGOT_LF
+#define INGOT_LF 1          /* 0 이면 인코더가 깃발을 안 켠다 */
+#endif
+#ifndef INGOT_LF_GRID
+#define INGOT_LF_GRID 8     /* 8 이면 8 배수 자리만 편다. 4 면 4x4 경계까지 */
+#endif
+/* 아래 둘은 재서 정했다 (2026-08-23, 표준 사진 8장).
+ *   판정 / 세기 :  8/16(첫 값) -6.89 -7.50 -9.87
+ *                 12/12        -6.99 -7.54 -9.91
+ *                 16/8         -6.94 -7.48 -10.02   ← 골랐다
+ *                 16/16        -7.10 -7.73 -9.66
+ * 16/16 이 제곱 오차로는 가장 좋지만 지각 지표를 0.36%p 잃는다. 우리가 지고
+ * 있는 축이 지각 쪽이라 그쪽을 산다. */
+#ifndef INGOT_LF_BETA
+#define INGOT_LF_BETA 16    /* beta = (step * BETA) >> 5. 평탄 판정 문턱 */
+#endif
+#ifndef INGOT_LF_TC
+#define INGOT_LF_TC 8       /* tc = (step * TC) >> 7. 고칠 수 있는 최대치 */
+#endif
+
+void ingot_loopfilter(uint8_t *pl, int pw, int ox, int oy, int gw, int gh,
+                      const uint8_t *map, int ms, int base, int chroma);
+
 #define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 12)
+
+#ifdef INGOT_BIT_STATS
+/* 비트를 갈래별로 세는 장치. 진단용이라 평소 빌드에는 없다. */
+enum {
+    INGOT_BC_LAST = 0,   /* 마지막 비영 계수 자리 */
+    INGOT_BC_ZERO,       /* 「0 인가」 깃발 */
+    INGOT_BC_FLAG,       /* 크기 깃발 둘·셋 */
+    INGOT_BC_EGP,        /* 지수 골롬 접두부 (모델 붙음) */
+    INGOT_BC_EGS,        /* 지수 골롬 접미부 (반반) */
+    INGOT_BC_SIGN,       /* 부호 (반반) */
+    INGOT_BC_MODE,       /* 예측 모드 */
+    INGOT_BC_SPLIT,      /* 블록 나눔 */
+    INGOT_BC_COUNT
+};
+extern double ingot_bitstat[2][INGOT_BC_COUNT];   /* [휘도0/색차1][갈래] */
+extern int ingot_bitcat, ingot_bitplane;
+void ingot_bitstat_dump(const char *path);
+#endif
 
 typedef struct {
     uint8_t *buf;
@@ -326,12 +353,16 @@ void ingot_rc_enc_bit(ingot_rc_enc *e, uint16_t *prob, int bit);
 void ingot_rc_enc_bypass(ingot_rc_enc *e, uint32_t value, int nbits);
 size_t ingot_rc_enc_finish(ingot_rc_enc *e);
 void ingot_rc_put_uint(ingot_rc_enc *e, uint16_t *m, uint32_t k);
-void ingot_rc_put_int(ingot_rc_enc *e, uint16_t *m, int v);
+uint32_t ingot_rc_get_uint(ingot_rc_dec *d, uint16_t *m);
+/* lo = 「값이 lo 이상인 것을 디코더도 이미 안다」. 그만큼 깃발을 건너뛴다. */
+void ingot_rc_put_uint_from(ingot_rc_enc *e, uint16_t *m, uint32_t k, int lo);
+void ingot_rc_put_int_from(ingot_rc_enc *e, uint16_t *m, int v, int lo);
+uint32_t ingot_rc_get_uint_from(ingot_rc_dec *d, uint16_t *m, int lo);
+int ingot_rc_get_int_from(ingot_rc_dec *d, uint16_t *m, int lo);
 
 void ingot_rc_dec_init(ingot_rc_dec *d, const uint8_t *buf, size_t size);
 int  ingot_rc_dec_bit(ingot_rc_dec *d, uint16_t *prob);
 uint32_t ingot_rc_dec_bypass(ingot_rc_dec *d, int nbits);
-uint32_t ingot_rc_get_uint(ingot_rc_dec *d, uint16_t *m);
 int  ingot_rc_get_int(ingot_rc_dec *d, uint16_t *m);
 
 /* 무리 번호로 모델 두 개의 자리를 얻는다. */
@@ -340,42 +371,6 @@ static inline int ingot_prob_of(int ctx)
     return ctx * INGOT_PROB_PER_CTX;
 }
 
-/* ---- 비트 쓰기 ---- */
-typedef struct {
-    uint8_t *buf;
-    size_t   cap;
-    size_t   pos;      /* 다음에 쓸 바이트 */
-    uint32_t acc;      /* 상위 비트부터 채운다 */
-    int      nbits;    /* acc 안의 유효 비트 수 */
-    int      overflow; /* 1 이면 버퍼 부족 */
-    uint32_t written_bits;  /* 지금까지 쓴 비트 수. 시험 인코딩에서 비용을 잴 때 쓴다 */
-} ingot_bw;
-
-void ingot_bw_init(ingot_bw *w, uint8_t *buf, size_t cap);
-void ingot_bw_put(ingot_bw *w, uint32_t value, int nbits);
-void ingot_bw_put_ue(ingot_bw *w, uint32_t k);        /* 지수 골롬 (부호 없음) */
-void ingot_bw_put_se(ingot_bw *w, int v);             /* 지수 골롬 (부호 있음) */
-void ingot_bw_put_rice(ingot_bw *w, int v, ingot_ctx *c);  /* 적응형 골롬-라이스 */
-void ingot_bw_put_rice_u(ingot_bw *w, uint32_t k, ingot_ctx *c); /* 접지 않는 판 */
-size_t ingot_bw_finish(ingot_bw *w);                  /* 0비트로 채우고 길이 반환 */
-
-/* ---- 비트 읽기 ---- */
-typedef struct {
-    const uint8_t *buf;
-    size_t   size;
-    size_t   pos;
-    uint32_t acc;
-    int      nbits;
-    int      error;    /* 1 이면 입력 끝을 넘어 읽으려 했다 */
-} ingot_br;
-
-void ingot_br_init(ingot_br *r, const uint8_t *buf, size_t size);
-uint32_t ingot_br_get(ingot_br *r, int nbits);
-uint32_t ingot_br_get_ue(ingot_br *r);
-int      ingot_br_get_se(ingot_br *r);
-int      ingot_br_get_rice(ingot_br *r, ingot_ctx *c);
-uint32_t ingot_br_get_rice_u(ingot_br *r, ingot_ctx *c);
-int      ingot_br_bit_pub(ingot_br *r);
 
 /* ---- 리틀엔디언 도우미 ---- */
 static inline void ingot_put32(uint8_t *p, uint32_t v)
