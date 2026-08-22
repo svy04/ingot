@@ -1,11 +1,20 @@
-/* codec.h - 공개 C 인터페이스 (규격 v0)
+/* ingot.h — public C interface.
  *
- * 설계 원칙 (SPEC.md 참조):
- *   - 정수 연산만. 부동소수점 0개.
- *   - 외부 의존 0. 표준 C99만.
- *   - 조각(group)은 서로 독립. 스레드 수가 비트스트림에 실리지 않는다.
+ * ingot is a lossy still-image codec. Three calls: encode, probe, decode.
+ * The library allocates the output buffer; you free() it.
  *
- * 이름이 정해지면 INGOT_ 접두사와 시그니처를 함께 바꾼다.
+ * Guarantees the format itself makes (see SPEC.md for the normative rules):
+ *   - Integer arithmetic only. Zero floating-point operations in the library,
+ *     so the same input always produces the same bytes on any machine.
+ *   - No dependencies beyond the C99 standard library.
+ *   - Groups are independent, and the number of them is not derived from the
+ *     thread count. An encoder may use any number of threads and the bytes
+ *     come out identical.
+ *   - The decoder returns an error code for malformed input. It does not
+ *     abort, and it does not read past the buffer you hand it.
+ *
+ * The comments in src/*.c are Korean; this header is English because it is
+ * what a caller reads.
  */
 #ifndef INGOT_H
 #define INGOT_H
@@ -17,53 +26,72 @@
 extern "C" {
 #endif
 
-/* 반환 코드. 0만 성공이다. 디코더는 어떤 입력에도 abort 하지 않는다. */
+/* Return codes. Only 0 means success.
+ * Pass any of these to ingot_strerror() for a short English message. */
 typedef enum {
     INGOT_OK              =  0,
-    INGOT_ERR_ARG         = -1,  /* 인자가 NULL 이거나 크기가 0 */
-    INGOT_ERR_MEMORY      = -2,
-    INGOT_ERR_SIGNATURE   = -3,  /* 시그니처 불일치 */
-    INGOT_ERR_VERSION     = -4,
-    INGOT_ERR_RESERVED    = -5,  /* 예약 비트가 1 */
-    INGOT_ERR_DIMENSION   = -6,  /* 크기가 범위 밖 */
-    INGOT_ERR_TRUNCATED   = -7,  /* 파일이 짧다 */
-    INGOT_ERR_TOC         = -8,  /* 목차가 파일 밖을 가리킨다 */
-    INGOT_ERR_GROUP_COUNT = -9,  /* 조각 수가 계산값과 다르다 */
-    INGOT_ERR_BITSTREAM   = -10  /* 조각 안의 값이 규격을 벗어난다 */
+    INGOT_ERR_ARG         = -1,  /* a pointer was NULL, or a size was 0 */
+    INGOT_ERR_MEMORY      = -2,  /* allocation failed */
+    INGOT_ERR_SIGNATURE   = -3,  /* not an ingot file */
+    INGOT_ERR_VERSION     = -4,  /* format version this build cannot read */
+    INGOT_ERR_RESERVED    = -5,  /* a reserved bit was set (reject, not skip) */
+    INGOT_ERR_DIMENSION   = -6,  /* width/height is 0, or past the limits below */
+    INGOT_ERR_TRUNCATED   = -7,  /* file ends before the header or table does */
+    INGOT_ERR_TOC         = -8,  /* an entry in the group table points outside */
+    INGOT_ERR_GROUP_COUNT = -9,  /* group count disagrees with width/height */
+    INGOT_ERR_BITSTREAM   = -10  /* group data is malformed, or its hash fails */
 } ingot_status;
 
-/* 규격 한계. 디코더는 이 값을 넘는 헤더를 거절한다. */
+/* Limits written into the format. A decoder rejects any header past them. */
 #define INGOT_MAX_DIM       65535
-#define INGOT_MAX_PIXELS    100000000u   /* 1억 화소 */
+#define INGOT_MAX_PIXELS    100000000u   /* 100 million */
 #define INGOT_GROUP_LOG2_MIN 6
 #define INGOT_GROUP_LOG2_MAX 10
 
-/* 인코딩 설정 */
+/* Encoder settings. Call ingot_encode_options_default() first, then adjust. */
 typedef struct {
-    int quality;      /* 0~63. 클수록 거칠고 작다 */
-    int group_log2;   /* 6~10. 조각 한 변의 로그2. 0을 주면 기본값 8 */
-    int subsample;    /* 0 = 4:4:4, 1 = 4:2:0. 화면·문자에는 0 을 쓴다 */
+    int quality;      /* 0..63. Higher is coarser and smaller. */
+    int group_log2;   /* 6..10, log2 of the group edge. 0 selects the default 8.
+                       * Smaller groups parallelize further but cost bits:
+                       * against one group per image, 256 costs 2.4% and
+                       * 64 costs 22.3% (8 photos, 6 quality steps). */
+    int subsample;    /* 0 = 4:4:4 (default), 1 = 4:2:0.
+                       * Never use 1 on screenshots or text — it costs 8.5 dB
+                       * there. It also measures as a loss on photographs. */
 } ingot_encode_options;
 
+/* Fills opt with the defaults. Safe to call with any non-NULL pointer. */
 void ingot_encode_options_default(ingot_encode_options *opt);
 
-/* RGB 8비트 세 채널을 인코딩한다.
- *   rgb    : width*height*3 바이트, 행 우선
- *   out    : 호출자가 free() 한다. 성공했을 때만 채워진다.
- * 실패하면 *out 은 NULL 이고 *out_size 는 0 이다. */
+/* Encodes 8-bit RGB into an ingot file.
+ *
+ *   rgb       width*height*3 bytes, row-major, no padding between rows
+ *   opt       may be NULL, which means the defaults
+ *   out       receives a malloc'd buffer that you free()
+ *   out_size  receives its length
+ *
+ * On failure *out is NULL and *out_size is 0. */
 ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
-                    const ingot_encode_options *opt,
-                    uint8_t **out, size_t *out_size);
+                          const ingot_encode_options *opt,
+                          uint8_t **out, size_t *out_size);
 
-/* 헤더만 읽는다. 손상 입력을 미리 거를 때 쓴다. */
+/* Reads only the header, so you can size a buffer or reject a file cheaply.
+ * Does not allocate. Either output pointer may be NULL if you don't need it. */
 ingot_status ingot_probe(const uint8_t *data, size_t size,
-                   int *width, int *height);
+                         int *width, int *height);
 
-/* 디코딩한다. *rgb 는 호출자가 free() 한다. */
+/* Decodes a whole file into 8-bit RGB.
+ *
+ *   rgb    receives a malloc'd width*height*3 buffer that you free()
+ *
+ * On failure *rgb is NULL. Malformed input always returns an error rather
+ * than crashing or producing a different picture — the format carries a hash
+ * of the group data for exactly that reason. */
 ingot_status ingot_decode(const uint8_t *data, size_t size,
-                    uint8_t **rgb, int *width, int *height);
+                          uint8_t **rgb, int *width, int *height);
 
-/* 오류 코드를 사람이 읽는 문자열로. 항상 NULL 이 아니다. */
+/* A short English description of a status code. Never returns NULL,
+ * including for values that are not valid ingot_status. */
 const char *ingot_strerror(ingot_status s);
 
 #ifdef __cplusplus
