@@ -16,6 +16,10 @@ ourdata/
 
 # 측정 결과
 tools/*.json
+# 진단 계량기가 내는 파일 (-DINGOT_BIT_STATS 빌드)
+bs_*.txt
+sg_*.txt
+zf_*.txt
 
 # 편집기
 .vscode/

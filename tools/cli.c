@@ -128,11 +128,21 @@ static const char *g_dump_path;
 static void dump_at_exit(void) { if (g_dump_path) ingot_prob_dump(g_dump_path); }
 #endif
 
+#ifdef INGOT_BIT_STATS
+void ingot_bitstat_dump(const char *path);
+static const char *g_bs_path;
+static void bs_at_exit(void) { if (g_bs_path) ingot_bitstat_dump(g_bs_path); }
+#endif
+
 int main(int argc, char **argv)
 {
 #ifdef INGOT_PROB_DUMP
     g_dump_path = getenv("INGOT_DUMP_PATH");
     if (g_dump_path) atexit(dump_at_exit);
+#endif
+#ifdef INGOT_BIT_STATS
+    g_bs_path = getenv("INGOT_BITSTAT_PATH");
+    if (g_bs_path) atexit(bs_at_exit);
 #endif
     if (argc < 2) { usage(); return 1; }
 
