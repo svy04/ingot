@@ -565,6 +565,11 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
         cap *= 2;
     }
 
+    /* 목차와 조각 데이터를 훑은 값을 머리말에 남긴다. 디코더가 이것으로
+     * 손상을 잡는다. 머리말 자체는 빼고 계산해야 여기에 써 넣을 수 있다. */
+    ingot_put32(buf + 20, ingot_hash32(buf + INGOT_HEADER_SIZE,
+                                       data_off - INGOT_HEADER_SIZE));
+
     *out = buf;
     *out_size = data_off;
     buf = NULL;
