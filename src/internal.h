@@ -279,7 +279,8 @@ static inline void ingot_ctx_update(ingot_ctx *c, uint32_t k)
 #define INGOT_PROB_PER_CTX 8
 #define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
 #define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + 2)   /* 16->8 과 8->4, 둘 */
-#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 3)
+/* 모드 비트는 앞 블록의 모드를 문맥으로 쓴다. 모드가 넷이므로 3 자리씩 넷. */
+#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 12)
 
 typedef struct {
     uint8_t *buf;

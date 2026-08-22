@@ -167,7 +167,7 @@ static int64_t block_distortion_n(const int16_t *a, const int16_t *b,
 static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                           int pw, int ph, int bx, int by, int gx0, int gy0,
                           int n, int base, int plane, uint16_t *probs,
-                          int64_t lambda)
+                          int *pmode, int64_t lambda)
 {
     int16_t src[256], pred[256], best_pred[256], resid[256], out[256];
     ingot_neighbors nb;
@@ -233,8 +233,12 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
      * 이것을 빠뜨리면 머리말 비트가 실제의 1/16 로 매겨져, 인코더가 블록을
      * 쪼개는 비용을 거의 공짜로 본다 (2026-08-22 발견). */
     best_cost += lambda * 2 * INGOT_BIT_UNIT;
-    ingot_rc_enc_bit(w, &probs[INGOT_PROB_MODE + 0], (best >> 1) & 1);
-    ingot_rc_enc_bit(w, &probs[INGOT_PROB_MODE + 1 + ((best >> 1) & 1)], best & 1);
+    {
+        int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
+        ingot_rc_enc_bit(w, &probs[mo + 0], (best >> 1) & 1);
+        ingot_rc_enc_bit(w, &probs[mo + 1 + ((best >> 1) & 1)], best & 1);
+        *pmode = best;
+    }
     code_residual(w, resid, base, n, plane, probs, best_pred, out, total);
     store_recon(recon, pw, ph, bx, by, n, out);
     return best_cost;
@@ -275,7 +279,7 @@ static void restore_patch(uint8_t *recon, int pw, int ph,
 static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                          int pw, int ph, int bx, int by, int gx0, int gy0,
                          int n, int base, int plane, uint16_t *probs,
-                         int64_t lambda)
+                         int *pmode, int64_t lambda)
 {
     uint16_t save[INGOT_PROB_COUNT], pwhole[INGOT_PROB_COUNT];
     uint8_t patch[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
@@ -283,19 +287,22 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     ingot_rc_enc trial;
     int64_t cost_whole, cost_split = 0;
     int i, h = n >> 1, sidx = (n == 16) ? 0 : 1;
+    int save_pm, try_pm;
 
     if (n <= INGOT_MIN_BLOCK)
         return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                          n, base, plane, probs, lambda);
+                          n, base, plane, probs, pmode, lambda);
 
     save_patch(recon, pw, ph, bx, by, n, patch);
     memcpy(save, probs, sizeof(save));
+    save_pm = *pmode;
 
     /* 후보 1: 통째로 하나 */
     memcpy(pwhole, probs, sizeof(pwhole));
+    try_pm = save_pm;
     ingot_rc_enc_init(&trial, scratch, 0);
     cost_whole = code_block(&trial, orig, recon, pw, ph, bx, by, gx0, gy0,
-                            n, base, plane, pwhole, lambda)
+                            n, base, plane, pwhole, &try_pm, lambda)
                + lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
 
@@ -304,28 +311,31 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
      * 이미지에서 이 한 줄이 시험 인코딩을 크게 줄인다. */
     if (cost_whole < lambda * INGOT_SPLIT_SKIP * INGOT_BIT_UNIT) {
         memcpy(probs, save, sizeof(save));
+        *pmode = save_pm;
         ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0);
         return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                          n, base, plane, probs, lambda)
+                          n, base, plane, probs, pmode, lambda)
              + lambda * INGOT_BIT_UNIT;
     }
 
     /* 후보 2: 넷으로. 앞 블록의 복원이 뒤 블록의 이웃이라 순서대로 굴려야 한다. */
     memcpy(probs, save, sizeof(save));
+    try_pm = save_pm;
     ingot_rc_enc_init(&trial, scratch, 0);
     for (i = 0; i < 4; i++)
         cost_split += code_quad(&trial, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
-                                gx0, gy0, h, base, plane, probs, lambda);
+                                gx0, gy0, h, base, plane, probs, &try_pm, lambda);
     cost_split += lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
     memcpy(probs, save, sizeof(save));
+    *pmode = save_pm;
 
     /* 이긴 쪽을 진짜로 쓴다. */
     if (cost_whole <= cost_split) {
         ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0);
         return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                          n, base, plane, probs, lambda)
+                          n, base, plane, probs, pmode, lambda)
              + lambda * INGOT_BIT_UNIT;
     }
     ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1);
@@ -333,7 +343,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     for (i = 0; i < 4; i++)
         cost_split += code_quad(w, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
-                                gx0, gy0, h, base, plane, probs, lambda);
+                                gx0, gy0, h, base, plane, probs, pmode, lambda);
     return cost_split;
 }
 
@@ -366,11 +376,11 @@ static void write_plane_group(ingot_rc_enc *w, const uint8_t *orig, uint8_t *rec
                               int pw, int ph, int ox, int oy, int gw, int gh,
                               int base, int p, uint16_t *probs, int64_t lambda)
 {
-    int my, mx;
+    int my, mx, pmode = INGOT_PRED_DC;   /* 조각·평면마다 DC 에서 시작한다 */
     for (my = 0; my < gh; my += 16)
         for (mx = 0; mx < gw; mx += 16)
             code_quad(w, orig, recon, pw, ph, ox + mx, oy + my, ox, oy,
-                      16, base, p, probs, lambda);
+                      16, base, p, probs, &pmode, lambda);
 }
 
 ingot_status ingot_encode(const uint8_t *rgb, int width, int height,

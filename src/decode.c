@@ -122,7 +122,7 @@ static void store_block(uint8_t *plane, int pw, int ph,
 
 static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                       int bx, int by, int gx0, int gy0, int n,
-                      int base, int p, uint16_t *probs)
+                      int base, int p, uint16_t *probs, int *pmode)
 {
     int16_t pred[256], back[256], out[256];
     ingot_neighbors nb;
@@ -130,9 +130,11 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
     int total = n * n, k;
 
     {
-        int hi = ingot_rc_dec_bit(r, &probs[INGOT_PROB_MODE + 0]);
-        int lo = ingot_rc_dec_bit(r, &probs[INGOT_PROB_MODE + 1 + hi]);
+        int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
+        int hi = ingot_rc_dec_bit(r, &probs[mo + 0]);
+        int lo = ingot_rc_dec_bit(r, &probs[mo + 1 + hi]);
         mode = (uint32_t)((hi << 1) | lo);
+        *pmode = (int)mode;
     }
     if (r->error) return 1;
 
@@ -150,21 +152,23 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
 /* 크기 n 덩어리 하나를 읽는다. 가장 작은 크기가 아니면 먼저 나눔 비트를 본다. */
 static int read_quad(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                      int bx, int by, int gx0, int gy0, int n,
-                     int base, int p, uint16_t *probs)
+                     int base, int p, uint16_t *probs, int *pmode)
 {
     int i, h = n >> 1, sidx = (n == 16) ? 0 : 1;
 
     if (n <= INGOT_MIN_BLOCK)
-        return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p, probs);
+        return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p,
+                          probs, pmode);
 
     if (!ingot_rc_dec_bit(r, &probs[INGOT_PROB_SPLIT + sidx])) {
         if (r->error) return 1;
-        return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p, probs);
+        return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p,
+                          probs, pmode);
     }
     if (r->error) return 1;
     for (i = 0; i < 4; i++)
         if (read_quad(r, plane, pw, ph, bx + (i & 1) * h, by + (i >> 1) * h,
-                      gx0, gy0, h, base, p, probs)) return 1;
+                      gx0, gy0, h, base, p, probs, pmode)) return 1;
     return 0;
 }
 
@@ -172,11 +176,11 @@ static int read_plane_group(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                             int ox, int oy, int gw, int gh,
                             int base, int p, uint16_t *probs)
 {
-    int my, mx;
+    int my, mx, pmode = INGOT_PRED_DC;   /* 조각·평면마다 DC 에서 시작한다 */
     for (my = 0; my < gh; my += 16)
         for (mx = 0; mx < gw; mx += 16)
             if (read_quad(r, plane, pw, ph, ox + mx, oy + my, ox, oy,
-                          16, base, p, probs)) return 1;
+                          16, base, p, probs, &pmode)) return 1;
     return 0;
 }
 
