@@ -19,13 +19,13 @@ $ sh build.sh
 built: ./ingot
 
 $ ./ingot enc photo.ppm photo.igt 20
-896x1110  q20  -> 221719 bytes (source 2983680, 7.43%)
+896x1110  q20  -> 136710 bytes (source 2983680, 4.58%)
 
 $ ./ingot dec photo.igt out.ppm
 decoded 896x1110
 
 $ ./ingot rt photo.ppm 20
-896x1110 q20 group 256  4:4:4 |   221719 B (  7.43%) | maxdiff 106 | PSNR  27.86 dB
+896x1110 q20 group 256  4:4:4 |   136710 B (  4.58%) | maxdiff 117 | PSNR  24.08 dB
 ```
 
 입출력은 PPM(P6, 8비트)만 받습니다. 다른 포맷은 ffmpeg 로 바꿔서 넣습니다.
