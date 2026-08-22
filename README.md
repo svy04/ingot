@@ -1,6 +1,6 @@
-# ingot
-
-![](docs/banner.png)
+<p align="center">
+  <img src="docs/banner.png" alt="ingot" width="820">
+</p>
 
 A lossy image codec built to win on **several axes at once** — not just compression ratio. This is **v1.7**.
 
