@@ -1,6 +1,6 @@
-# ingot
-
-![](docs/banner.png)
+<p align="center">
+  <img src="docs/banner.png" alt="ingot" width="820">
+</p>
 
 **여러 축에서 동시에 이기는 것**을 목표로 만든 손실 이미지 코덱입니다. 압축률 하나만 보지 않습니다. 이것이 **v1.7** 입니다.
 
