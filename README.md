@@ -15,10 +15,10 @@ A lossy image codec built to win on **several axes at once** — not just compre
 
 Most codecs trade one property for another. ingot picks the axes that were left empty because nobody optimized for them, and locks them into the format itself.
 
-- **Ahead of JPEG and WebP on all three metrics** — against JPEG **−31.6%** (PSNR), **−30.8%** (SSIM), **−21.8%** (SSIMULACRA2) on standard photos; against WebP **−14.5%**, **−6.2%**, **−11.0%**. Ahead of JPEG XL on PSNR by **−10.9%**. AVIF is still ahead of us: **+18.2%** on the perceptual metric, down from +32.8% a day earlier.
+- **Ahead of JPEG and WebP on all three metrics** — against JPEG **−31.8%** (PSNR), **−32.9%** (SSIM), **−22.6%** (SSIMULACRA2) on standard photos; against WebP **−17.7%**, **−10.1%**, **−12.9%**. Ahead of JPEG XL on PSNR by **−13.3%**. AVIF is still ahead of us: **+14.7%** on the perceptual metric, down from +32.8% a day earlier.
 - **Bit-exact** — integer math only, zero floating-point operations in the library. The same input always produces the same bytes.
-- **Thread count never enters the bitstream** — any number of threads, identical bytes out. The price is real and grows as groups shrink: **2.7%** at the default 256, **29.7%** at 64, measured against one group per image (6 images, 6 quality steps). Tiling in existing standards costs 3.7–8%, so this is ahead only near the default.
-- **Small** — 2,468 lines of C99 in `src/`, of which 1,832 are on the decode path. That count includes 128 lines of license headers and a 1.4 KB learned probability table; the code itself is 2,340 lines. No dependencies beyond libc.
+- **Thread count never enters the bitstream** — any number of threads, identical bytes out. The price is real and grows as groups shrink: **2.9%** at the default 256, **29.8%** at 64, measured against one group per image (6 images, 6 quality steps). Tiling in existing standards costs 3.7–8%, so this is ahead only near the default.
+- **Small** — 2,643 lines of C99 in `src/`, of which 1,978 are on the decode path. That count includes 128 lines of license headers and a 1.4 KB learned probability table; the code itself is 2,515 lines. No dependencies beyond libc.
 - **Hostile input is expected** — the decoder returns error codes, never crashes. 300 corrupted files, 0 abnormal exits.
 
 ```console
@@ -26,13 +26,13 @@ $ sh build.sh
 built: ./ingot
 
 $ ./ingot enc photo.ppm photo.igt 20
-896x1110  q20  -> 136694 bytes (source 2983680, 4.58%)
+896x1110  q20  -> 134960 bytes (source 2983680, 4.52%)
 
 $ ./ingot dec photo.igt out.ppm
 decoded 896x1110
 
 $ ./ingot rt photo.ppm 20
-896x1110 q20 group 256  4:4:4 |   136694 B (  4.58%) | maxdiff 117 | PSNR  24.08 dB
+896x1110 q20 group 256  4:4:4 |   134960 B (  4.52%) | maxdiff 121 | PSNR  24.10 dB
 ```
 
 Input and output are PPM (P6, 8-bit) only. Convert other formats with ffmpeg.
@@ -43,14 +43,14 @@ Input and output are PPM (P6, 8-bit) only. Convert other formats with ffmpeg.
 
 | vs | PSNR | SSIM | SSIMULACRA2 |
 |---|---|---|---|
-| JPEG | **−31.6%** | **−30.8%** | **−21.8%** |
-| WebP | **−14.5%** | **−6.2%** | **−11.0%** |
-| JPEG XL | **−10.9%** | +5.3% | +17.7% |
-| AVIF | +45.8% | +42.2% | +18.2% |
+| JPEG | **−31.8%** | **−32.9%** | **−22.6%** |
+| WebP | **−17.7%** | **−10.1%** | **−12.9%** |
+| JPEG XL | **−13.3%** | +1.1% | +15.7% |
+| AVIF | +41.3% | +37.8% | +14.7% |
 
 **The third column is why v1.1 exists.** Up to v1.0 this codec was tuned against squared error alone. Adding a perceptual metric showed that at the old setting it lost to *JPEG* on SSIMULACRA2 (+5.6%) while appearing to beat WebP and JPEG XL on PSNR. One spec constant — how much coarser high-frequency coefficients are quantized — moved it from +5.6% to **−11.3%** against JPEG, at the cost of 2.4 points of PSNR. v1.1 takes that trade.
 
-**Two things about the comparison setup, in our disfavour and in theirs.** libwebp has no lossy 4:4:4 mode — it only accepts `yuv420p` — while ingot, JPEG, and AVIF are all measured at 4:4:4 here. So the WebP column understates WebP on material where colour detail matters; the honest reading of our WebP result is not "we compress better" but "WebP cannot enter this comparison at full colour." In the other direction, AVIF is called at `cpu-used 6`, a fast preset that costs libaom real compression. Our AVIF gap is therefore *smaller* than the one printed above, not larger.
+**Two things about the comparison setup, in our disfavour and in theirs.** libwebp has no lossy 4:4:4 mode — it only accepts `yuv420p` — while ingot, JPEG, and AVIF are all measured at 4:4:4 here. So the WebP column understates WebP on material where colour detail matters; the honest reading of our WebP result is not "we compress better" but "WebP cannot enter this comparison at full colour." In the other direction, AVIF is called at `cpu-used 6`, a fast preset that costs libaom real compression. Our AVIF gap is therefore *larger* than the one printed above, not smaller.
 
 SSIMULACRA2 is a perceptual metric designed for still images; the Python implementation is used here because upstream ships no binary. It is slow (about two seconds per image), which is why the harness reports all three metrics rather than replacing the other two.
 
@@ -60,10 +60,10 @@ SSIMULACRA2 is a perceptual metric designed for still images; the Python impleme
 
 | vs | PSNR | SSIM | SSIMULACRA2 |
 |---|---|---|---|
-| JPEG | **−45.3%** | **−37.8%** | **−36.7%** |
-| WebP | **−22.3%** | **−17.4%** | **−8.3%** |
-| JPEG XL | **−30.5%** | **−17.8%** | +22.2% |
-| AVIF | +82.8% | +93.3% | +56.2% |
+| JPEG | **−50.9%** | **−45.9%** | **−46.2%** |
+| WebP | **−31.0%** | **−26.2%** | **−22.3%** |
+| JPEG XL | **−37.8%** | **−27.6%** | +1.7% |
+| AVIF | +64.2% | +69.6% | +38.8% |
 
 On this material ingot beats JPEG and WebP on all three metrics, and JPEG XL on two of three.
 
@@ -73,12 +73,12 @@ On this material ingot beats JPEG and WebP on all three metrics, and JPEG XL on 
 |---|---|---|
 | Determinism | **done** | Encoding twice gives identical bytes. 0 float ops in `src/` |
 | Parallelism | **in the format; the price is larger than first measured** | Against one group per image: 256 (default) **+2.9%**, 128 +10.2%, 64 **+29.8%** BD-rate (re-measured 2026-08-23). The 1.4% printed here until 2026-08-22 was measured before arithmetic coding, which resets the probability tables at every group boundary — small groups now have too few symbols to learn from. The encoder writes each group into its own slot, so an OpenMP build parallelizes it; this machine has no OpenMP runtime |
-| Simplicity | **budgeted, never benchmarked against anyone** | Decode path 1,832 lines, 2,468 total (128 of them license headers), 0 external deps, spec under 14 pages. An independent pass on 2026-08-23 found 316 lines that nothing called — a whole Golomb-Rice bit-IO file left behind when arithmetic coding replaced it — and deleting them did not change one byte of output. No competitor has been measured on this axis |
+| Simplicity | **budgeted, never benchmarked against anyone** | Decode path 1,978 lines, 2,643 total (128 of them license headers), 0 external deps, spec under 14 pages. An independent pass on 2026-08-23 found 316 lines that nothing called — a whole Golomb-Rice bit-IO file left behind when arithmetic coding replaced it — and deleting them did not change one byte of output. No competitor has been measured on this axis |
 | Patent freedom | expired art only | DCT (1974), Golomb (1966), arithmetic coding (late 1970s). **No legal review yet** |
-| Decode speed | **slowest of the five, but no longer getting worse** | Wall clock 0.171 s vs JPEG 0.063, WebP 0.079, JXL 0.088, AVIF 0.085. Both numbers include process startup. v1.7 added a boundary filter to the decoder and still came out *faster* than v1.6's 0.178 s — not reading a flag whose answer is fixed saved more than the filter costs. Still last by a factor of two |
-| Encode speed | **behind everything but AVIF** | 2.74 s vs JPEG 0.083, WebP 0.157, JXL 0.234; AVIF is 6.41 s. v1.7 went from 1.64 s because the encoder now tries all four prediction modes instead of the top two by residual sum. That trade bought −2.1% BD-rate and is a compile-time knob (`INGOT_MODE_TRIALS`) |
+| Decode speed | **slowest of the five** | 0.249 s vs JPEG 0.083, WebP 0.087, AVIF 0.095, JXL 0.098. All include process startup. v1.7 added a boundary filter to the decoder and still came out faster than v1.6's 0.178 s — not reading a flag whose answer is fixed saved more than the filter costs. Still last by a factor of two |
+| Encode speed | **slowest of the five** | 2.607 s vs JPEG 0.161, WebP 0.185, JXL 0.213, AVIF 0.310. **This entry said "faster than AVIF" until 2026-08-23, and that was wrong.** The speed table was calling libaom without `-cpu-used`, the quality table with `-cpu-used 6`; two different encoders were being timed and scored. Matched up, AVIF encodes 9.5× faster than we do and lands within 3% of our file size. We are last on both speed axes |
 
-Chroma subsampling (4:2:0) is off by default and measures as a loss on standard photos (PSNR +1.4% vs +0.1% against JXL). It costs **8.5 dB on screenshots**, so never turn it on for text or UI.
+Chroma subsampling (4:2:0) is off by default and measures as a loss on standard photos. It costs **several dB on screenshots** — measured 4.5 to 22.8 dB depending on quality — so never turn it on for text or UI.
 
 ## What is in the format, and what it was worth
 
@@ -107,7 +107,7 @@ Each change was added one at a time and kept only if it measured better. Reverte
 | Trying all four modes instead of the top two (v1.7, encoder only) | **−2.1%** | −1.7% |
 | Not coding a flag whose answer is fixed (v1.7) | **−4.9%** | **−4.3%** |
 | Block boundary filter (v1.7, decoder only, costs zero bits) | **−7.2%** | **−7.7%** |
-| Rate-distortion level reduction | **+0.6%p, and −3.6%p on SSIMULACRA2 (reverted)** | |
+| Rate-distortion level reduction | **+0.6%p, and +3.6%p on SSIMULACRA2 (reverted)** | |
 | Per-block lambda from local variance | **+7.2%p on SSIMULACRA2 (reverted)** | |
 | Context model on coefficient signs | **0.55% ceiling, not taken** | |
 | Skipping blocks entirely outside the image | **0.0%, not taken** | |
@@ -142,6 +142,7 @@ tools/bench.py     BD-rate harness against JPEG/WebP/AVIF/JXL, three metrics
 tools/trial.py     BD-rate of one build against a saved baseline of our own
 tools/sweep.py     one knob, several values, one line each
 tools/learn_probs.py  regenerates the normative probability table
+tools/certain_flag.py  re-counts the fact the last-flag rule rests on
 tools/speed.py     encode and decode timing
 test/run_tests.py  determinism, round-trip, golden files, corrupted input
 ```
@@ -157,5 +158,5 @@ Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 You may use ingot in a commercial product without opening your source. What the
 license does require is attribution: section 4(d) says a redistribution must carry
 the contents of the NOTICE file, and section 6 makes reproducing that NOTICE an
-explicit exception to the trademark clause. The NOTICE here is two lines — the
-project name and where it came from.
+explicit exception to the trademark clause. The NOTICE here is short — the project
+name, the copyright line, and where it came from.

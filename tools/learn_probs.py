@@ -62,11 +62,15 @@ def read_const(name, default):
     return default
 
 
+EXTRA_FLAGS = [""]      # --flags 로 받은 빌드 손잡이. 표마다 문법이 다르다
+
+
 def build_with_dump(flat):
     """flat 이면 표를 무시하고 반반에서 시작한다 (첫 바퀴)."""
     if os.path.exists(BIN):
         os.remove(BIN)
     extra = " -DINGOT_PROB_LEARN" if flat else ""
+    extra += " " + EXTRA_FLAGS[0]
     r = sh("gcc -std=c99 -O2 -DINGOT_PROB_DUMP" + extra + " -w " + SRC + " -o ingot -lm")
     if r.returncode or not os.path.exists(BIN):
         print((r.stdout or b"").decode("utf-8", "replace")[-800:])
@@ -166,7 +170,7 @@ def fix_up(vals, syms):
     return vals, base
 
 
-def emit(vals, base):
+def emit(vals, base, name="ingot_prob_init"):
     n = len(vals)
     rows = []
     for i in range(0, n, 12):
@@ -183,18 +187,18 @@ def emit(vals, base):
  * 이 표는 규격의 일부다. 디코더도 같은 값에서 출발해야 한다.
  * 다시 만들려면 `python tools/learn_probs.py` 를 쓴다.
  */
-static const uint16_t ingot_prob_init[%d] = {
+static const uint16_t %s[%d] = {
 %s
 };
-""" % (where, n, table)
+""" % (where, name, n, table)
 
 
-def install(code):
+def install(code, name="ingot_prob_init"):
     p = os.path.join(ROOT, "src/rangecoder.c")
     s = io.open(p, encoding="utf-8").read()
-    a = s.index("static const uint16_t ingot_prob_init[")
+    a = s.index("static const uint16_t %s[" % name)
     b = s.index("};", a) + 3
-    c = s.rfind("/* ---- 시작 확률표 ----", 0, a)
+    c = s.rfind("/* ---- 시작 확률표", 0, a)
     if c < 0:
         c = a
     s = s[:c] + code + s[b:]
@@ -209,8 +213,14 @@ def main():
     ap.add_argument("--rounds", type=int, default=2,
                     help="학습 바퀴 수. 기본 2 (규격의 표를 만든 값)")
     ap.add_argument("--dry", action="store_true")
+    ap.add_argument("--flags", default="",
+                    help='빌드 손잡이. 예: "-DINGOT_DIRPRED=1"')
+    ap.add_argument("--table", default="base", choices=("base", "dir"),
+                    help="심을 표. dir 이면 ingot_prob_init_dir 을 갈아 끼운다")
     a = ap.parse_args()
 
+    EXTRA_FLAGS[0] = a.flags
+    name = "ingot_prob_init_dir" if a.table == "dir" else "ingot_prob_init"
     syms = read_const("INGOT_CDF_SYMS", 0)
     qs = [int(x) for x in a.qualities.split(",")]
 
@@ -223,15 +233,15 @@ def main():
         vals, base = fix_up(vals, syms) if syms else (
             [max(64, min(1984, v)) for v in vals], None)
         print("무리 %d 칸%s" % (n, (", 누적 확률표 시작 %d" % base) if base else ""))
-        code = emit(vals, base)
+        code = emit(vals, base, name)
         if rnd < a.rounds - 1:
-            install(code)      # 다음 바퀴가 이 표를 시작값으로 쓴다
+            install(code, name)   # 다음 바퀴가 이 표를 시작값으로 쓴다
 
     if a.dry:
         print(code[:400] + " ...")
         print("(--dry 라 마지막 표는 심지 않았습니다)")
         return
-    install(code)
+    install(code, name)
     if os.path.exists(DUMP):
         os.remove(DUMP)
     print("src/rangecoder.c 에 심었습니다.")

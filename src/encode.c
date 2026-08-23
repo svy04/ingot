@@ -90,19 +90,21 @@ static void store_recon(uint8_t *recon, int pw, int ph,
  * ((3*3*10)/1600) 처럼 0 으로 뭉개진다. 그러면 그 구간에서 율왜곡 판단이
  * 통째로 죽는다. 왜곡을 이 배수만큼 키워 λ 에 소수 자리를 만들어 준다
  * (2026-08-22 발견). */
-#define INGOT_RD_SCALE 256
+/* 눈금이 고와지면(BIT_UNIT 이 커지면) 같은 배수만큼 같이 키운다.
+ * 그래야 lambda 의 정수 자릿수가 그대로 남는다. */
+#define INGOT_RD_SCALE (256 * (INGOT_BIT_UNIT / 16))
 
 /* 양자화까지 한 계수를 담고, 같은 값으로 복원 블록을 만든다.
  * w 가 NULL 이면 비트를 세기만 하고 아무것도 쓰지 않는다(시험 인코딩). */
 static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n,
                           int plane, uint16_t *probs,
-                          const int16_t *pred, int16_t *recon)
+                          const int16_t *pred, int16_t *recon, int tx)
 {
     int16_t coef[256], z[256], deq[256], back[256];
     const uint16_t *zz = ingot_zigzag_of(n);
     int total = n * n, k, last = 0;
 
-    ingot_fdct(resid, n, coef, n);
+    ingot_fdct(resid, n, coef, n, tx);
 
     for (k = 0; k < total; k++) {
         int idx = zz[k];
@@ -126,6 +128,12 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
         for (k = 0; k < last; k++) {
             int idx = zz[k];
             int lvl = ingot_ctx_level(ingot_nb2d(placed, idx, n));
+#ifdef INGOT_BIT_STATS
+            if (w && w->cap && k == last - 1) {
+                ingot_certain[0]++;
+                if (z[k] != 0) ingot_certain[1]++;
+            }
+#endif
             /* k == last-1 이면 이 계수가 0 이 아닌 것을 디코더도 안다.
              * last 가 「마지막 비영 계수의 다음 자리」이기 때문이다.
              * 그 깃발을 안 적는다 (2026-08-23). */
@@ -144,7 +152,7 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
         if (v < -32768) v = -32768;
         deq[idx] = (int16_t)v;
     }
-    ingot_idct(deq, back, n, n);
+    ingot_idct(deq, back, n, n, tx);
     for (k = 0; k < total; k++)
         recon[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
 }
@@ -187,6 +195,29 @@ static int64_t block_distortion_n(const int16_t *a, const int16_t *b,
     return s;
 }
 
+/* ---- 모드 기호 ----
+ * 담는 값을 재는 쪽과 실제로 쓰는 쪽이 한 문법을 보게 함수 둘로 묶어 둔다.
+ * 둘이 어긋나면 인코더가 자기 값을 잘못 재고도 왕복은 통과해 안 잡힌다. */
+/* 네 모드: 2비트 트리. 문맥은 앞 블록의 모드다. */
+static int64_t mode_price(const uint16_t *probs, int pmode, int mode, int n)
+{
+    int mo = INGOT_PROB_MODE + (pmode & 3) * 3;
+    int hi = (mode >> 1) & 1;
+    int64_t c;
+    (void)n;
+    c  = (int64_t)ingot_rc_price(probs[mo + 0], hi);
+    c += (int64_t)ingot_rc_price(probs[mo + 1 + hi], mode & 1);
+    return c;
+}
+
+static void mode_write(ingot_rc_enc *w, uint16_t *probs, int pmode, int mode, int n)
+{
+    int mo = INGOT_PROB_MODE + (pmode & 3) * 3, hi = (mode >> 1) & 1;
+    (void)n;
+    ingot_rc_enc_bit(w, &probs[mo + 0], hi);
+    ingot_rc_enc_bit(w, &probs[mo + 1 + hi], mode & 1);
+}
+
 /* 블록 하나를 네 모드로 시험해 가장 싼 것을 고르고 쓴다.
  * w 가 버리는 통로면 비용만 재는 셈이 된다.
  * cost 를 돌려준다 (왜곡 + lambda * 비트). */
@@ -220,7 +251,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         rough[m] = sad;
         order[m] = m;
     }
-    for (t = 1; t < INGOT_PRED_COUNT; t++) {      /* 삽입 정렬. 넷뿐이다 */
+    for (t = 1; t < INGOT_PRED_COUNT; t++) {      /* 삽입 정렬. 넷 또는 여덟이다 */
         int key = order[t];
         for (ti = t - 1; ti >= 0 && rough[order[ti]] > rough[key]; ti--)
             order[ti + 1] = order[ti];
@@ -240,18 +271,14 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         /* 비트만 세는 시험 인코딩. 무리 상태는 사본으로 굴린다. */
         memcpy(trial_p, probs, sizeof(trial_p));
         ingot_rc_enc_init(&trial, scratch, 0);     /* 용량 0 = 세기만 한다 */
-        code_residual(&trial, resid, base, n, plane, trial_p, pred, out);
+        code_residual(&trial, resid, base, n, plane, trial_p, pred, out,
+                      ingot_tx_of_mode(m));
         bits = (int64_t)trial.bits;
         /* 모드를 적는 값도 후보마다 다르다. 앞 블록과 같은 모드는 확률 모델이
          * 이미 그쪽으로 기울어 있어 싸고, 드문 모드는 비싸다. 이것을 고른 뒤
          * 상수로 더하면 후보 사이의 차이가 통째로 사라져, 모드 선택이 왜곡만
          * 보고 결정된다 (2026-08-22). */
-        {
-            int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
-            int hi = (m >> 1) & 1;
-            bits += (int64_t)ingot_rc_price(probs[mo + 0], hi);
-            bits += (int64_t)ingot_rc_price(probs[mo + 1 + hi], m & 1);
-        }
+        bits += mode_price(probs, *pmode, m, n);
         dist = block_distortion_n(src, out, total, n);
         cost = dist * INGOT_RD_SCALE + lambda * bits;
 
@@ -271,17 +298,14 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         ingot_bitplane = plane ? 1 : 0;
         ingot_bitcat = INGOT_BC_MODE;
 #endif
-        {
-            int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
-            ingot_rc_enc_bit(w, &probs[mo + 0], (best >> 1) & 1);
-            ingot_rc_enc_bit(w, &probs[mo + 1 + ((best >> 1) & 1)], best & 1);
-        }
+        mode_write(w, probs, *pmode, best, n);
 #ifdef INGOT_BIT_STATS
         ingot_bitcat = INGOT_BC_ZERO;
 #endif
         *pmode = best;
     }
-    code_residual(w, resid, base, n, plane, probs, best_pred, out);
+    code_residual(w, resid, base, n, plane, probs, best_pred, out,
+                  ingot_tx_of_mode(best));
     store_recon(recon, pw, ph, bx, by, n, out);
     return best_cost;
 }
@@ -595,10 +619,15 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
             for (gi = 0; gi < group_count; gi++) {
                 size_t src = data_off + (size_t)gi * slot;
                 if (dst != src) memmove(buf + dst, buf + src, glen[gi]);
+#if INGOT_TOC4
+                ingot_put32(buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY,
+                            (uint32_t)glen[gi]);
+#else
                 ingot_put32(buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY,
                             (uint32_t)dst);
                 ingot_put32(buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY + 4,
                             glen[gi]);
+#endif
                 dst += glen[gi];
             }
             data_off = dst;

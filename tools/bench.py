@@ -190,11 +190,19 @@ def _pchip_eval(x, y, d, t):
             (-2 * s3 + 3 * s2) * y[lo + 1] + (s3 - s2) * h * d[lo + 1])
 
 
-def bd_rate(ref, test, steps=400):
+# 적분을 시작하는 화질 바닥. 이 아래는 아무도 안 쓰는 구간이라 이득을 부풀린다.
+# SSIM 은 -10*log10(1-SSIM) 으로 옮긴 값이라 절대 기준이 없어 안 건다.
+BD_FLOOR = {"psnr": 30.0, "ssim": None, "s2": 30.0}
+
+
+def bd_rate(ref, test, steps=400, qmin=None):
     """Bjontegaard delta rate. 음수면 test 가 ref 보다 적은 비트를 쓴다.
 
     ref, test 는 [(bpp, 화질), ...]. 겹치는 화질 구간에서만 잰다.
     단조 보존 보간을 쓰고, 결과가 터무니없이 크면 None 을 돌려준다.
+
+    qmin 을 주면 그 화질 아래는 적분하지 않는다. 안 주면 겹치는 구간 전체다
+    (2026-08-23 까지의 동작). 아무도 안 쓰는 저화질 구간이 이득을 부풀린다.
     """
     if len(ref) < 4 or len(test) < 4:
         return None
@@ -217,6 +225,8 @@ def bd_rate(ref, test, steps=400):
 
     lo = max(rx[0], tx[0])
     hi = min(rx[-1], tx[-1])
+    if qmin is not None:
+        lo = max(lo, qmin)
     if hi - lo < 0.5:
         return None
 
@@ -330,7 +340,7 @@ def main():
             nc = curves(rows, "ingot", metric)
             deltas, skipped = [], 0
             for img in sorted(set(oc) & set(nc)):
-                d = bd_rate(oc[img], nc[img])
+                d = bd_rate(oc[img], nc[img], qmin=BD_FLOOR[metric])
                 if d is None:
                     skipped += 1
                 else:
@@ -347,7 +357,7 @@ def main():
                   % ("SSIMULACRA2" if metric == "s2" else metric.upper()))
             for c in ("jpeg", "webp", "avif", "jxl"):
                 other = curves(rows, c, metric)
-                ds = [bd_rate(other[i], base[i])
+                ds = [bd_rate(other[i], base[i], qmin=BD_FLOOR[metric])
                       for i in sorted(set(base) & set(other))]
                 ds = [d for d in ds if d is not None]
                 if ds:

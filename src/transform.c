@@ -60,6 +60,7 @@ const int16_t ingot_dct16[16][16] = {
     {   9,  -26,   43,  -57,   70,  -80,   87,  -90,   90,  -87,   80,  -70,   57,  -43,   26,   -9 },
 };
 
+
 /* 저주파부터 훑는 순서. 왼쪽 위에서 대각선을 번갈아 간다.
  * 꼬리의 0 을 잘라내려면 이 순서가 필요하다. */
 const uint16_t ingot_zz8[64] = {
@@ -107,10 +108,13 @@ static const int16_t *dct_of(int n)
          : (n == 8) ? &ingot_dct8[0][0] : &ingot_dct16[0][0];
 }
 
-void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n)
+#define MAT_V(n, tx) (((void)(tx)), dct_of(n))
+#define MAT_H(n, tx) (((void)(tx)), dct_of(n))
+
+void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n, int tx)
 {
     int32_t tmp[256];
-    const int16_t *M = dct_of(n);
+    const int16_t *Mh = MAT_H(n, tx), *Mv = MAT_V(n, tx);
     int shift = (n == 4) ? INGOT_FWD_SHIFT4
               : (n == 8) ? INGOT_FWD_SHIFT8 : INGOT_FWD_SHIFT16;
     int u, v, x, y;
@@ -120,7 +124,7 @@ void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n)
         for (u = 0; u < n; u++) {
             int32_t s = 0;
             for (x = 0; x < n; x++)
-                s += (int32_t)M[u * n + x] * row[x];
+                s += (int32_t)Mh[u * n + x] * row[x];
             tmp[y * n + u] = s;
         }
     }
@@ -128,7 +132,7 @@ void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n)
         for (u = 0; u < n; u++) {
             int32_t s = 0;
             for (y = 0; y < n; y++)
-                s += (int32_t)M[v * n + y] * tmp[y * n + u];
+                s += (int32_t)Mv[v * n + y] * tmp[y * n + u];
             s = (s + (1 << (shift - 1))) >> shift;
             if (s >  32767) s =  32767;
             if (s < -32768) s = -32768;
@@ -137,7 +141,7 @@ void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n)
     }
 }
 
-void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n)
+void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n, int tx)
 {
     /* 64비트로 모은다. 계수가 규격 상한(±32767)까지 찬 16x16 을 역변환하면
      * 둘째 단계 누산이 32비트 한계의 31.6 배까지 간다. 정상 이미지에서는
@@ -145,7 +149,7 @@ void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n)
      * 동작이 컴파일러 재량이 된다 — "어떤 바이트열에도 안 죽는다"는 약속이
      * 거기서 깨진다 (2026-08-22). 순변환은 입력이 잔차(±255)라 안전하다. */
     int64_t tmp[256];
-    const int16_t *M = dct_of(n);
+    const int16_t *Mh = MAT_H(n, tx), *Mv = MAT_V(n, tx);
     int shift = (n == 4) ? INGOT_INV_SHIFT4
               : (n == 8) ? INGOT_INV_SHIFT8 : INGOT_INV_SHIFT16;
     int u, v, x, y;
@@ -154,7 +158,7 @@ void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n)
         for (y = 0; y < n; y++) {
             int64_t s = 0;
             for (v = 0; v < n; v++)
-                s += (int64_t)M[v * n + y] * src[v * n + u];
+                s += (int64_t)Mv[v * n + y] * src[v * n + u];
             tmp[y * n + u] = s;
         }
     }
@@ -163,7 +167,7 @@ void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n)
         for (x = 0; x < n; x++) {
             int64_t s = 0;
             for (u = 0; u < n; u++)
-                s += (int64_t)M[u * n + x] * tmp[y * n + u];
+                s += (int64_t)Mh[u * n + x] * tmp[y * n + u];
             s = (s + (1 << (shift - 1))) >> shift;
             if (s >  32767) s =  32767;
             if (s < -32768) s = -32768;

@@ -62,7 +62,13 @@ def main():
         data = argv[argv.index("--data") + 1]
     if "--images" in argv:
         images = argv[argv.index("--images") + 1]
-    base = "base_mode" if data == "testdata" else "base_mode_our"
+    # 기준선은 **지금 담긴 판**이 기본이다. 그래야 「변경 없음」이 +0.00 으로
+    # 찍히고, 실험이 이득인지 손해인지 부호만 보면 된다. 예전에는 아침 판을
+    # 기본으로 두어 아무것도 안 고쳐도 -7% 가 찍혔고, 읽는 사람이 매번
+    # 머릿속으로 빼야 했다 (2026-08-23 에 실제로 오독이 났다).
+    # 옛 판과 견주려면 TRIAL_BASE 로 지목한다.
+    base = os.environ.get("TRIAL_BASE") or (
+        "base_final" if data == "testdata" else "base_mode_our")
 
     if not os.path.exists(os.path.join(HERE, base + ".json")):
         print("기준선 없음: tools/%s.json — bench.py --save 로 먼저 만든다" % base)
@@ -81,9 +87,12 @@ def main():
     if not got:
         print(out[-2000:])
         return 1
-    print("%-42s | %s  P %+6.2f  S %+6.2f  S2 %+6.2f   (음수 = 기준선보다 낫다)"
-          % (flags or "(변경 없음)", data,
-             got.get("PSNR", 0), got.get("SSIM", 0), got.get("S2", 0)))
+    # 못 잰 값을 0 으로 찍으면 「변화 없음」과 구별이 안 된다. 지각 지표는
+    # 파이썬 모듈이 없으면 조용히 빠지므로 이 자리가 실제로 위험하다.
+    def cell(k):
+        return "%+6.2f" % got[k] if k in got else " 못잼 "
+    print("%-42s | %s  P %s  S %s  S2 %s   (음수 = 기준선보다 낫다)"
+          % (flags or "(변경 없음)", data, cell("PSNR"), cell("SSIM"), cell("S2")))
     return 0
 
 

@@ -29,9 +29,28 @@
 
 #define INGOT_VERSION      0
 #define INGOT_HEADER_SIZE  24
+/* 목차 한 칸의 크기. 8 이면 (오프셋, 길이), 4 면 길이만이다.
+ * 오프셋은 앞 조각들의 길이 합이라 디코더가 이미 안다 — 인코더가 조각을
+ * 마지막에 붙여 모으므로 파일 안에서 빈틈이 없기 때문이다. */
+#ifndef INGOT_TOC4
+#define INGOT_TOC4 1
+#endif
+#if INGOT_TOC4
+#define INGOT_TOC_ENTRY    4
+#else
 #define INGOT_TOC_ENTRY    8
+#endif
 #define INGOT_BLOCK        8
 #define INGOT_BLOCK16     16
+/* 왜곡 자가 평면 밖 화소(가장자리 복제분)를 세지 않게 하는 손잡이.
+ * 0 이면 지금과 같다. 인코더만의 판단이라 규격이 아니다. */
+
+/* 경계 화소 가중을 「지금 견주는 블록의 가장자리」가 아니라 「16x16 묶음의
+ * 가장자리」에만 준다. 0 이면 지금과 같다.
+ * 지금은 16x16 통짜 후보가 31/256 칸만 두 배로 세고 8x8 넷 후보는 60/256 을
+ * 두 배로 센다 — 같은 자리를 서로 다른 자로 재는 셈이라 나눔 쪽이 왜곡을
+ * 10.1% 더 무겁게 받는다((256+60)/(256+31)). 인코더만의 판단이라 규격이 아니다. */
+
 /* 4x4 는 8x8 과 같은 눈금을 쓴다. 그래야 같은 양자화 스텝이 같은 세기로 든다. */
 #define INGOT_FWD_SHIFT4  14
 #define INGOT_INV_SHIFT4  18
@@ -42,8 +61,24 @@
 #endif
 #define INGOT_FWD_SHIFT8  14
 #define INGOT_INV_SHIFT8  18
-#define INGOT_FWD_SHIFT16 15
-#define INGOT_INV_SHIFT16 17
+/* 세 크기가 같은 눈금을 쓴다. 2026-08-23 까지 16x16 만 15/17 이었다.
+ *
+ * 상수 잔차 100 을 넣으면 DC 가 4x4 는 1600, 8x8 은 3235, 16x16 은 3200 이다.
+ * 직교 기준(400/800/1600)으로 나누면 배수가 4.00 / 4.04 / 2.00 이었다. 즉
+ * 같은 양자화 스텝이 16x16 에서만 두 배 거칠게 들었다. 그래서 인코더가
+ * 「16 을 넷으로 나눌까」를 견줄 때 두 후보가 서로 다른 세기의 양자화를 받아
+ * 그 판단이 사실상 죽어 있었다. 왕복 오차가 8x8 의 두 배(최대 4 대 2)인
+ * 것도 같은 이유다.
+ *
+ * 14/18 로 내려 셋을 맞추니 세 지표가 함께 올랐다: 같은 조건에서
+ * -5.20 / -7.68 / -5.78 이 -7.46 / -9.11 / -6.87 이 된다. 디코더 줄은
+ * 안 늘고 상수 두 개만 바뀐다. 비트스트림은 바뀐다. */
+#ifndef INGOT_FWD_SHIFT16
+#define INGOT_FWD_SHIFT16 14
+#endif
+#ifndef INGOT_INV_SHIFT16
+#define INGOT_INV_SHIFT16 18
+#endif
 
 /* ---- 변환 (transform.c) ---- */
 extern const int16_t ingot_dct4[4][4];
@@ -53,16 +88,52 @@ extern const uint16_t ingot_zz8[64];
 
 const uint16_t *ingot_zigzag_of(int n);
 
-/* n 은 8 또는 16 이다. src 는 잔차 블록(행 우선, stride 지정). */
-void ingot_fdct(const int16_t *src, int src_stride, int16_t *dst, int n);
-void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n);
+/* ADST 손잡이. 1 이면 예측 모드에 맞춰 방향마다 DCT 대신 DST-VII 을 쓴다.
+ * 0 이면 지금까지와 완전히 같은 바이트가 나온다 — tx 는 늘 0 이 된다.
+ * 켜면 비트스트림이 바뀐다. 종류를 적는 비트는 없다: 디코더도 모드를 안다. */
+
+#define INGOT_TX_VADST 1    /* 세로(열) 방향에 ADST */
+#define INGOT_TX_HADST 2    /* 가로(행) 방향에 ADST */
+
+
+/* n 은 4, 8, 16 이다. src 는 잔차 블록(행 우선, stride 지정).
+ * tx 는 INGOT_TX_* 의 조합이다. ADST 가 꺼져 있으면 무시된다. */
+void ingot_fdct(const int16_t *src, int src_stride, int16_t *dst, int n, int tx);
+void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx);
 
 /* ---- 인트라 예측 (predict.c) ---- */
+
+/* 방향 예측 손잡이. 1 이면 각도 모드 넷이 붙어 모드가 여덟이 된다.
+ * 0 이면 지금까지와 완전히 같은 바이트가 나온다 — 모드 기호의 문법도,
+ * 시작 확률표도 갈라 두었다. 켜면 비트스트림이 바뀐다. */
+
 #define INGOT_PRED_DC     0
 #define INGOT_PRED_V      1
 #define INGOT_PRED_H      2
 #define INGOT_PRED_PLANE  3
 #define INGOT_PRED_COUNT  4
+
+/* ---- 예측 모드 -> 변환 종류 ----
+ * 예측이 시작된 가장자리에서 멀어지는 방향에 ADST 를 쓴다. 세로 예측이면
+ * 위에서 아래로 잔차가 자라므로 세로에 ADST, 가로 예측이면 가로에 ADST 다.
+ * 평면·대각(모드 4)은 두 가장자리를 다 쓰므로 양쪽에 준다. 각도 모드는 주
+ * 참조가 위면 세로, 왼쪽이면 가로다.
+ *
+ * 배정은 손잡이로 갈아 낄 수 있게 두었다 (재서 정하려고).
+ *   1  DC없음 / V세로 / H가로 / 평면양쪽 / 4양쪽 / 5,6세로 / 7가로   (VP9 대응)
+ *   2  모드 4 도 세로로 (주 참조가 위라서)
+ *   3  V·H 에만 준다 (평면·각도는 DCT)
+ *   4  DC 를 뺀 전부 양쪽
+ *   5  1 번의 세로·가로를 뒤집은 것. 이득이 아니라 **계기 점검**이다 —
+ *      뒤집은 쪽이 더 좋으면 내가 방향을 반대로 붙인 것이다
+ *   6  3 번의 세로·가로를 뒤집은 것. 5 번과 같은 계기인데 평면 모드를 빼서
+ *      방향만 남긴다 */
+
+static inline int ingot_tx_of_mode(int mode)
+{
+    (void)mode;
+    return 0;
+}
 
 /* 실제로 담아 보는 모드 수. 나머지는 잔차 절대합 순위에서 걸러진다.
  * 인코더만의 선택이라 규격이 아니다.
@@ -101,13 +172,29 @@ void ingot_ycbcr_to_rgb(const uint8_t *y, const uint8_t *cb, const uint8_t *cr,
                      int count, uint8_t *rgb);
 
 /* ---- 양자화 ---- */
+/* 품질 번호를 양자화 스텝으로 옮기는 배수(16 분모).
+ *
+ * 16 이었는데 32 로 올렸다. 같은 날 16x16 변환 눈금을 다른 둘과 맞추면서
+ * 계수가 두 배 커졌기 때문이다. 그대로 두면 같은 품질 번호가 훨씬 고화질을
+ * 뜻하게 되어(q20 이 옛 q10 쯤) 사용자 기대도 벤치 곡선도 어긋난다.
+ *
+ * 32 로 맞추니 옛 눈금과 거의 정확히 겹친다 — Baruch q10 에서 2.104 bpp /
+ * 30.80 dB 대 옛 판 2.105 bpp / 30.68 dB 다. 같은 비트에 화질이 0.12 dB
+ * 높고, 눈금은 그대로다. */
+#ifndef INGOT_QSCALE
+#define INGOT_QSCALE 32
+#endif
+
 static inline int ingot_qstep(int quality)
 {
     if (quality < 0) quality = 0;
     if (quality > 63) quality = 63;
     /* 낮은 비트레이트까지 닿아야 다른 포맷과 같은 구간에서 견줄 수 있다.
      * 2026-08-21: 1~127 범위로는 곡선이 안 겹쳐 BD-rate 를 절반도 못 쟀다. */
-    return 1 + quality * 2 + (quality * quality) / 16;   /* 1 ~ 375 */
+    /* 눈금 배수. 16 이 예전 값이다. 변환 눈금을 바꾸면 같은 번호가 다른
+     * 화질을 뜻하게 되므로 여기서 되돌린다. 16 분모다. */
+    return 1 + (quality * 2 + (quality * quality) / 16)
+             * INGOT_QSCALE / 16;
 }
 
 #ifndef INGOT_QROUND
@@ -139,13 +226,13 @@ static inline int ingot_dequantize(int level, int step)
  * 사람 눈은 고주파와 색차에 둔하므로 그쪽을 더 거칠게 버린다.
  * idx 는 블록 안 인덱스(v*8+u). plane 0 이 휘도, 1·2 가 색차.
  * INGOT_QW_ALPHA·INGOT_QW_CHROMA 는 실측으로 정한 규격 상수다. */
-/* 2026-08-21 실측으로 정했다 (tools/tune_quant.py, 표준 시험 이미지 4장).
- * ALPHA(고주파 기울기): 0. 어떤 값도 이득이 없었다 — PSNR 기준으로도 SSIM 기준으로도
- *   가중을 넣을수록 나빠졌다. 아직 엔트로피 부호화가 고정 확률이라 고주파를 거칠게 해도
- *   비트가 그만큼 안 줄기 때문으로 본다(추정). 적응 부호화를 넣은 뒤 다시 훑는다.
- * CHROMA(색차 배수): 20. 두 지표 모두에서 개선되는 유일한 값이다
- *   (PSNR -0.58%, SSIM -1.51%). SSIM 만 보면 32 가 -8.95% 로 훨씬 좋지만
- *   그 값은 PSNR 에서 +2.87% 라 지표 편향이 의심된다. 보수적으로 고른다. */
+/* CHROMA(색차 배수)는 2026-08-21 실측으로 정했다
+ * (tools/tune_quant.py, 표준 시험 이미지 4장). 20 이 두 지표 모두에서
+ * 개선되는 유일한 값이다 (PSNR -0.58%, SSIM -1.51%). SSIM 만 보면 32 가
+ * -8.95% 로 훨씬 좋지만 그 값은 PSNR 에서 +2.87% 라 지표 편향이 의심된다.
+ * 보수적으로 고른다.
+ *
+ * ALPHA(고주파 기울기)의 근거는 아래 매크로 바로 위에 있다. 그 자리를 봐라. */
 #ifndef INGOT_QW_ALPHA
 /* 자리가 높을수록 양자화를 거칠게 한다. 사람 눈은 고주파 오차를 덜 본다.
  * 제곱 오차로만 재면 0 이 최선으로 나온다. 그런데 지각 지표(SSIMULACRA2)로
@@ -159,10 +246,17 @@ static inline int ingot_dequantize(int level, int step)
 #define INGOT_QW_CHROMA 20
 #endif
 
+/* 같은 기울기를 1/16 눈금으로 적는 자리. 기본값은 INGOT_QW_ALPHA 를 그대로
+ * 옮긴 것이라 지금 판과 비트까지 같다. 정수 ALPHA 는 1 과 2 사이를 못 재는데
+ * 그 사이가 궁금할 때 이쪽을 쓴다 (예: -DINGOT_QW_ALPHA16=20 이면 1.25). */
+#ifndef INGOT_QW_ALPHA16
+#define INGOT_QW_ALPHA16 (INGOT_QW_ALPHA * 16)
+#endif
+
 static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 {
     int u = idx % n, v = idx / n;
-    int s = (base * (16 + INGOT_QW_ALPHA * (u + v))) >> 4;
+    int s = (base * (256 + INGOT_QW_ALPHA16 * (u + v))) >> 8;
     if (plane) s = (s * INGOT_QW_CHROMA) >> 4;
     return s < 1 ? 1 : s;
 }
@@ -273,7 +367,12 @@ static inline int ingot_ctx_last_n(int plane, int n)
 #define INGOT_PROB_PER_CTX 8
 #define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
 #define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + 2)   /* 16->8 과 8->4, 둘 */
-/* 모드 비트는 앞 블록의 모드를 문맥으로 쓴다. 모드가 넷이므로 3 자리씩 넷. */
+/* 모드 비트는 앞 블록의 모드를 문맥으로 쓴다. 모드가 넷이므로 3 자리씩 넷.
+ *
+ * 방향 예측을 켜면 모드가 여덟이라 이 배치를 그대로 못 쓴다. 앞 블록 모드를
+ * 문맥으로 두면 8 x 7 = 56 자리가 되어 자리마다 표본이 너무 얇아진다. 그래서
+ * 「앞 블록과 같은가」한 비트로 그 상관을 먼저 먹고, 아니면 3단 트리로 여덟
+ * 중 하나를 적는다. 둘 다 블록 크기(4·8·16)로만 갈린다 — 3 + 21 = 24 자리다. */
 /* 쓸 수 있는 모드가 둘뿐인 자리(조각의 맨 위 줄·맨 왼쪽 줄)는 한 비트로
  * 끝난다. 그 비트의 뜻이 네 모드일 때의 첫 비트와 다르므로 자리를 따로 둔다. */
 /* ---- 블록 경계 필터 (loopfilter.c) ----
@@ -321,6 +420,10 @@ enum {
 };
 extern double ingot_bitstat[2][INGOT_BC_COUNT];   /* [휘도0/색차1][갈래] */
 extern int ingot_bitcat, ingot_bitplane;
+/* last-1 자리의 계수를 센다. [0]=그 자리 개수, [1]=그중 0 이 아닌 것.
+ * 규격의 「확실한 깃발을 안 적는다」가 서 있는 근거라 다시 셀 수 있어야 한다
+ * (tools/certain_flag.py). */
+extern long ingot_certain[2];
 void ingot_bitstat_dump(const char *path);
 #endif
 
@@ -332,7 +435,7 @@ typedef struct {
     int      cache;
     int64_t  cache_size;
     int      overflow;
-    uint32_t bits;      /* 담은 값의 크기. 1/16 비트 단위 (INGOT_BIT_UNIT) */
+    uint64_t bits;      /* 담은 값의 크기. 1/INGOT_BIT_UNIT 비트 단위 */
 } ingot_rc_enc;
 
 typedef struct {
@@ -341,6 +444,10 @@ typedef struct {
     uint32_t range, code;
     int      error;
 } ingot_rc_dec;
+
+/* 인코더가 자기 비트를 재는 자의 눈금.
+ * 0 이면 지금까지의 128칸 표(1/16 비트), 1 이면 512칸 표(1/256 비트).
+ * 규격이 아니라 인코더만의 자다 — 켜도 옛 파일이 그대로 읽힌다. */
 
 /* 비트 값을 세는 눈금. 1 비트 = INGOT_BIT_UNIT 이다. */
 #define INGOT_BIT_UNIT 16

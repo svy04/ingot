@@ -53,16 +53,18 @@ static int effective_mode(const ingot_neighbors *nb, int mode)
 {
     if (mode == INGOT_PRED_V && !nb->has_top) return INGOT_PRED_DC;
     if (mode == INGOT_PRED_H && !nb->has_left) return INGOT_PRED_DC;
-    if (mode == INGOT_PRED_PLANE && !(nb->has_top && nb->has_left))
+    if (mode >= INGOT_PRED_PLANE && !(nb->has_top && nb->has_left))
         return INGOT_PRED_DC;
     return mode;
 }
+
 
 void ingot_predict(const ingot_neighbors *nb, int mode, int16_t *pred)
 {
     int n = nb->n, x, y, i;
 
     mode = effective_mode(nb, mode);
+
 
     if (mode == INGOT_PRED_DC) {
         int sum = 0, cnt = 0, dc;

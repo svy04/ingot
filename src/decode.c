@@ -87,7 +87,7 @@ ingot_status ingot_probe(const uint8_t *data, size_t size, int *width, int *heig
 
 /* 잔차 블록 하나를 읽어 역변환까지 한다. 규격을 벗어나면 0 이 아닌 값을 돌려준다. */
 static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
-                         uint16_t *probs, int16_t *back)
+                         uint16_t *probs, int16_t *back, int tx)
 {
     int16_t deq[256];
     const uint16_t *zz = ingot_zigzag_of(n);
@@ -121,7 +121,7 @@ static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
         deq[idx] = (int16_t)v;
     }
 
-    ingot_idct(deq, back, n, n);
+    ingot_idct(deq, back, n, n, tx);
     return 0;
 }
 
@@ -154,8 +154,7 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
 
     ingot_gather_neighbors(plane, pw, ph, bx, by, gx0, gy0, n, &nb);
     {
-        /* 이 자리에서 서로 다른 그림을 내는 모드만 세어 본다. 인코더도 같은
-         * 이웃 조건을 보므로 목록이 언제나 같다. 하나뿐이면 안 적혀 있다. */
+        /* 네 모드: 앞 블록의 모드를 문맥으로 두 비트. */
         int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
         int hi = ingot_rc_dec_bit(r, &probs[mo + 0]);
         int lo = ingot_rc_dec_bit(r, &probs[mo + 1 + hi]);
@@ -166,7 +165,8 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
 
     ingot_predict(&nb, (int)mode, pred);
 
-    if (read_residual(r, base, n, p, probs, back)) return 1;
+    if (read_residual(r, base, n, p, probs, back,
+                      ingot_tx_of_mode((int)mode))) return 1;
 
     for (k = 0; k < total; k++)
         out[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
@@ -251,6 +251,9 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
     uint32_t gi;
     int p, qbase;
     uint8_t *lfmap = NULL;      /* 4x4 칸마다 「여기가 블록 경계다」 깃발 */
+#if INGOT_TOC4
+    size_t run_off = 0;         /* 첫 조각의 자리. 아래에서 data_min 으로 잡는다 */
+#endif
     int lfms = 0;
 
     if (rgb_out) *rgb_out = NULL;
@@ -271,10 +274,15 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
             return INGOT_ERR_TOC;
         for (g = 0; g < h.group_count; g++) {
             const uint8_t *e = data + toc + (size_t)g * INGOT_TOC_ENTRY;
+#if INGOT_TOC4
+            uint32_t len = ingot_get32(e);
+#else
             uint32_t off = ingot_get32(e), len = ingot_get32(e + 4);
             if ((uint64_t)off > (uint64_t)size) return INGOT_ERR_TOC;
             if ((uint64_t)len > (uint64_t)size - off) return INGOT_ERR_TOC;
+#endif
             sum += len;
+            if (sum > (uint64_t)size) return INGOT_ERR_TOC;
         }
         if (sum > (uint64_t)size) return INGOT_ERR_TOC;
     }
@@ -305,10 +313,19 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         }
     }
 
+#if INGOT_TOC4
+    run_off = h.data_min;       /* 첫 조각은 목차 바로 뒤에서 시작한다 */
+#endif
     for (gi = 0; gi < h.group_count; gi++) {
         const uint8_t *entry = data + h.toc_off + (size_t)gi * INGOT_TOC_ENTRY;
+#if INGOT_TOC4
+        /* 오프셋은 앞 조각들의 길이 합이다. 목차에 안 적혀 있다. */
+        uint32_t len = ingot_get32(entry);
+        uint32_t off = (uint32_t)run_off;
+#else
         uint32_t off = ingot_get32(entry);
         uint32_t len = ingot_get32(entry + 4);
+#endif
         uint32_t gx = gi % h.gx_count, gy = gi / h.gx_count;
         int ox = (int)gx * h.gsize, oy = (int)gy * h.gsize;
         int gw = h.width - ox, gh = h.height - oy;
@@ -326,6 +343,9 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         cgw = h.cw - cox; if (cgw > csize) cgw = csize;
         cgh = h.ch - coy; if (cgh > csize) cgh = csize;
 
+#if INGOT_TOC4
+        run_off = (size_t)off + len;
+#endif
         ingot_rc_dec_init(&r, data + off, len);
         ingot_prob_reset(probs, INGOT_PROB_COUNT);
 

@@ -10,6 +10,7 @@
 
 기계 한 대, 이미지 여섯 장이다. 일반화하지 않는다.
 """
+import io
 import os, subprocess, sys, tempfile, time
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -19,13 +20,34 @@ ROOT = os.path.dirname(HERE)
 BIN = os.path.join(ROOT, "ingot.exe" if os.name == "nt" else "ingot")
 REPEAT = 3
 
-# bench.py 품질 곡선의 가운데 설정
-EXTERNAL = [
-    ("jpeg", ".jpg", ["-q:v", "9"]),
-    ("webp", ".webp", ["-c:v", "libwebp", "-quality", "72"]),
-    ("avif", ".avif", ["-c:v", "libaom-av1", "-crf", "42", "-still-picture", "1"]),
-    ("jxl", ".jxl", ["-c:v", "libjxl", "-distance", "3.4"]),
-]
+# bench.py 품질 곡선의 가운데 설정을 **그대로** 가져온다.
+#
+# 2026-08-23 까지 이 목록을 손으로 베껴 두고 있었는데 두 곳이 갈려 있었다.
+# AVIF 에 cpu-used 를 안 줘서 libaom 기본(훨씬 느린 설정)으로 돌았고,
+# JPEG 에 4:4:4 를 안 줬다. 그 바람에 속도 표가 「AVIF 보다 빠르다」를
+# 말하고 화질 표는 다른 AVIF 를 재는 상태였다. 같은 설정으로 맞춰 재면
+# AVIF 0.86초 대 우리 4.84초로 뒤집힌다.
+#
+# 베끼지 않고 bench.py 에서 직접 읽어 온다. 한 곳만 고치면 둘이 같이 움직인다.
+import importlib.util as _il
+_spec = _il.spec_from_file_location(
+    "ingot_bench", os.path.join(os.path.dirname(os.path.abspath(__file__)), "bench.py"))
+
+
+def _bench_external():
+    """bench.py 의 EXTERNAL 표에서 품질 곡선의 가운데 설정을 뽑는다."""
+    src = io.open(_spec.origin, encoding="utf-8").read()
+    ns = {}
+    i = src.index("EXTERNAL = [")
+    j = src.index(chr(10) + "]", i) + 2
+    exec(src[i:j], ns)
+    out = []
+    for name, ext, qs, mk in ns["EXTERNAL"]:
+        out.append((name, ext, mk(qs[3])))     # 여섯 중 넷째가 가운데다
+    return out
+
+
+EXTERNAL = _bench_external()
 
 
 def timed(args):
