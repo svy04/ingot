@@ -31,7 +31,7 @@ void ingot_encode_options_default(ingot_encode_options *opt)
 {
     if (!opt) return;
     opt->quality = 20;
-    opt->group_log2 = 8;
+    opt->group_log2 = INGOT_GROUP_DEFAULT;
     opt->subsample = 0;
 }
 
@@ -170,8 +170,11 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
 #endif
 
 static int64_t block_distortion_n(const int16_t *a, const int16_t *b,
-                                  int total, int n)
+                                  int total, int n, int bx, int by)
 {
+#if !INGOT_EDGE_GRID
+    (void)bx; (void)by;
+#endif
     int64_t s = 0;
 #if INGOT_EDGE == 16
     int i;
@@ -187,7 +190,13 @@ static int64_t block_distortion_n(const int16_t *a, const int16_t *b,
         for (x = 0; x < n; x++) {
             int d = (int)a[y * n + x] - (int)b[y * n + x];
             int64_t e = (int64_t)d * d;
-            if (x == n - 1 || y == n - 1) e = (e * INGOT_EDGE) / 16;
+#if INGOT_EDGE_GRID
+            /* 그림 안 16 격자의 끝. 후보를 어떻게 나누든 같은 화소가 걸린다. */
+            if (((bx + x) & 15) == 15 || ((by + y) & 15) == 15)
+#else
+            if (x == n - 1 || y == n - 1)
+#endif
+                e = (e * INGOT_EDGE) / 16;
             s += e;
         }
     }
@@ -279,7 +288,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
          * 상수로 더하면 후보 사이의 차이가 통째로 사라져, 모드 선택이 왜곡만
          * 보고 결정된다 (2026-08-22). */
         bits += mode_price(probs, *pmode, m, n);
-        dist = block_distortion_n(src, out, total, n);
+        dist = block_distortion_n(src, out, total, n, bx, by);
         cost = dist * INGOT_RD_SCALE + lambda * bits;
 
         if (best_cost < 0 || cost < best_cost) {
@@ -487,7 +496,7 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
     quality = opt->quality;
     if (quality < 0) quality = 0;
     if (quality > 63) quality = 63;
-    group_log2 = opt->group_log2 ? opt->group_log2 : 8;
+    group_log2 = opt->group_log2 ? opt->group_log2 : INGOT_GROUP_DEFAULT;
     if (group_log2 < INGOT_GROUP_LOG2_MIN) group_log2 = INGOT_GROUP_LOG2_MIN;
     if (group_log2 > INGOT_GROUP_LOG2_MAX) group_log2 = INGOT_GROUP_LOG2_MAX;
     gsize = 1 << group_log2;

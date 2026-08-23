@@ -14,6 +14,7 @@
   python tools/bench.py --all           기존 포맷까지 함께 (느리다)
   python tools/bench.py --images 8      쓸 이미지 수
 """
+import io
 import json, math, os, re, subprocess, sys, tempfile, time
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -83,7 +84,10 @@ def measure_ours(images, tmp, sub=0):
         for q in QUALITIES:
             enc = os.path.join(tmp, "b.igt")
             dec = os.path.join(tmp, "b.ppm")
-            r, et = sh([BIN, "enc", src, enc, str(q), "8", str(sub)])
+            # 조각 크기는 환경 변수로 바꿀 수 있다. 기본값을 재려면 여기를
+            # 바꿔야 한다 — 인코더의 기본 손잡이는 이 인자에 덮인다.
+            r, et = sh([BIN, "enc", src, enc, str(q),
+                        os.environ.get("INGOT_GROUP", "8"), str(sub)])
             if r.returncode != 0:
                 continue
             r2, dt = sh([BIN, "dec", enc, dec])
@@ -299,6 +303,23 @@ def summarize(rows, label):
                 sum(r["dec_s"] for r in g) / len(g)))
 
 
+def pick_images(data_dir, nimg):
+    """시험 이미지를 고른다. 목록 파일이 있으면 그 순서를 정본으로 쓴다.
+
+    2026-08-23 까지는 폴더를 가나다순으로 훑어 앞에서 잘랐다. 고른 것이 아니라
+    이름 순서였고, 같은 변경을 8 장과 30 장으로 재면 답이 두 배까지 갈렸다."""
+    lst = os.path.join(data_dir, "SET.txt")
+    if os.path.exists(lst):
+        names = [ln.strip() for ln in io.open(lst, encoding="utf-8")
+                 if ln.strip() and not ln.startswith("#")]
+        paths = [os.path.join(data_dir, n) for n in names]
+        paths = [p for p in paths if os.path.exists(p)]
+    else:
+        paths = sorted(os.path.join(data_dir, f) for f in os.listdir(data_dir)
+                       if f.endswith(".ppm"))
+    return paths[:nimg]
+
+
 def main():
     args = sys.argv[1:]
     nimg = 8
@@ -307,8 +328,7 @@ def main():
     data_dir = DATA
     if "--data" in args:
         data_dir = os.path.join(ROOT, args[args.index("--data") + 1])
-    images = sorted(os.path.join(data_dir, f) for f in os.listdir(data_dir)
-                    if f.endswith(".ppm"))[:nimg]
+    images = pick_images(data_dir, nimg)
     if not images:
         print("시험 이미지가 없다"); return 1
     print("이미지 %d장, 품질 %d단계%s"

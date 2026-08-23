@@ -147,6 +147,15 @@ static const uint16_t ingot_prob_init[702] = {
 };
 #define INGOT_PROB_TAB ingot_prob_init
 
+/* 표는 지금 문맥 배치에 맞춰 학습된 것이다. 배치를 바꾸는 손잡이
+ * (INGOT_NBLEV·INGOT_CTX_BYSIZE 등)를 돌리면 칸 번호가 밀려 표가 엉뚱한
+ * 자리에 깔린다. 그 상태로 재면 그 손잡이가 가짜 벌점을 받는다 — 실측으로
+ * NBLEV=7 이 3.53%p, BYSIZE=0 이 4.56%p 였고 상당 부분이 표 어긋남이었다.
+ * 조용히 틀리느니 안 돌게 막는다 (2026-08-23). */
+#if INGOT_PROB_COUNT != 702 && !defined(INGOT_PROB_LEARN)
+#error "학습 확률표 702 칸이 지금 문맥 배치와 안 맞는다. tools/learn_probs.py 로 다시 배워 심거나, 견주는 양쪽 모두 -DINGOT_PROB_LEARN 으로 표를 걷고 재라."
+#endif
+
 void ingot_prob_reset(uint16_t *p, int count)
 {
 #ifdef INGOT_PROB_LEARN
@@ -177,6 +186,11 @@ void ingot_rc_enc_init(ingot_rc_enc *e, uint8_t *buf, size_t cap)
      * 이 한 줄이 안 맞으면 첫 값부터 어긋난다 (2026-08-21 왕복 시험이 잡음). */
     e->cache = 0;
     e->cache_size = 1;
+#if INGOT_NOLEAD
+    /* 첫 밀어내기에서 나가는 0 한 바이트를 안 낸다. 그때는 캐시가 비어 있고
+     * 자리올림도 없으므로 0xFF 대기 갈래를 안 깬다. 조각마다 1 바이트다. */
+    e->lead = 1;
+#endif
     e->overflow = 0;
     e->bits = 0;
 }
@@ -191,6 +205,10 @@ static void rc_shift_low(ingot_rc_enc *e)
 {
     if ((uint32_t)e->low < 0xFF000000u || (e->low >> 32) != 0) {
         if (e->cache_size) {
+#if INGOT_NOLEAD
+            if (e->lead) e->lead = 0;      /* 첫 0 바이트는 안 낸다 */
+            else
+#endif
             rc_put_byte(e, (uint8_t)(e->cache + (e->low >> 32)));
             while (--e->cache_size)
                 rc_put_byte(e, (uint8_t)(0xFF + (e->low >> 32)));
@@ -292,7 +310,12 @@ void ingot_rc_dec_init(ingot_rc_dec *d, const uint8_t *buf, size_t size)
     d->range = 0xFFFFFFFFu;
     d->code = 0;
     d->error = 0;
+#if INGOT_NOLEAD
+    /* 인코더가 첫 0 바이트를 안 냈으므로 네 바이트만 읽는다. */
+    for (i = 0; i < 4; i++) {
+#else
     for (i = 0; i < 5; i++) {
+#endif
         d->code = (d->code << 8) |
                   (d->pos < d->size ? d->buf[d->pos++] : 0);
     }
