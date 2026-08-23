@@ -323,7 +323,7 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         for (g = 0; g < h.group_count; g++) {
             const uint8_t *e = data + toc + (size_t)g * INGOT_TOC_ENTRY;
 #if INGOT_TOC4
-            uint32_t len = ingot_get32(e);
+            uint32_t len = INGOT_TOC_LEN(ingot_get32(e));
 #else
             uint32_t off = ingot_get32(e), len = ingot_get32(e + 4);
             if ((uint64_t)off > (uint64_t)size) return INGOT_ERR_TOC;
@@ -368,7 +368,7 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         const uint8_t *entry = data + h.toc_off + (size_t)gi * INGOT_TOC_ENTRY;
 #if INGOT_TOC4
         /* 오프셋은 앞 조각들의 길이 합이다. 목차에 안 적혀 있다. */
-        uint32_t len = ingot_get32(entry);
+        uint32_t len = INGOT_TOC_LEN(ingot_get32(entry));
         uint32_t off = (uint32_t)run_off;
 #else
         uint32_t off = ingot_get32(entry);
@@ -425,6 +425,33 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
     }
 
     ingot_ycbcr_to_rgb(plane[0], cb, cr, h.width * h.height, rgb);
+#if INGOT_RESTORE
+    /* 조각마다 고른 복원 필터를 건다. 참조는 언제나 거르기 전 사본이라
+     * 조각마다 번호가 달라도 서로의 결과를 안 본다. */
+    {
+        size_t n3 = (size_t)h.width * (size_t)h.height * 3;
+        uint8_t *tmp = (uint8_t *)malloc(n3);
+        uint8_t *pre = (uint8_t *)malloc(n3);
+        if (tmp && pre) {
+            uint32_t g;
+            memcpy(pre, rgb, n3);
+            for (g = 0; g < h.group_count; g++) {
+                const uint8_t *e = data + h.toc_off
+                                 + (size_t)g * INGOT_TOC_ENTRY;
+                int filt = INGOT_TOC_FILT(ingot_get32(e));
+                uint32_t gx = g % h.gx_count, gy = g / h.gx_count;
+                int ox = (int)gx * h.gsize, oy = (int)gy * h.gsize;
+                int gw = h.width - ox, gh = h.height - oy;
+                if (gw > h.gsize) gw = h.gsize;
+                if (gh > h.gsize) gh = h.gsize;
+                if (filt)
+                    ingot_restore_region(rgb, pre, h.width, h.height,
+                                         ox, oy, gw, gh, filt, tmp);
+            }
+        }
+        free(tmp); free(pre);
+    }
+#endif
 
     *rgb_out = rgb;
     rgb = NULL;

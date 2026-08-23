@@ -30,24 +30,29 @@
  */
 #include "internal.h"
 
-/* (a, b). 앞쪽 일곱은 흐리게, 뒤쪽 여덟은 또렷하게 만든다. */
+/* (a, b). 처음 표는 절반을 「또렷하게」에 썼는데 여덟 장 어느 품질에서도
+ * 한 번도 안 뽑혔고, 대신 「흐리게」 쪽 가장 센 값이 표 끝에 닿았다.
+ * 그래서 흐린 쪽을 두텁게 다시 짰다 (2026-08-24). */
 static const int8_t ingot_rest_tab[16][2] = {
     {  0,   0 },   /* 0 = 필터 없음 */
-    {  0,   8 }, {  0,  16 }, {  0,  24 },
-    {  2,  12 }, {  4,  16 }, {  4,  24 }, {  8,  24 },
-    {  0,  -8 }, {  0, -16 }, {  0, -24 },
-    { -2, -12 }, { -4, -16 }, {  2, -16 },
-    {  4, -20 }, { -4, -24 }
+    {  0,   6 }, {  0,  12 }, {  0,  18 }, {  0,  24 },
+    {  2,  14 }, {  4,  18 }, {  4,  24 },
+    {  8,  24 }, {  8,  28 }, { 12,  28 }, { 12,  32 },
+    { 16,  32 }, { 20,  36 },
+    {  0, -12 }, { -4, -20 }
 };
 
 #define REST_SH 7                      /* 128 로 나눈다 */
 
+/* src 의 i0 부터 i1 까지를 걸러 dst 의 같은 자리에 쓴다. 참조는 [0, n)
+ * 안에서 자른다 -- 조각 가장자리에서도 이웃 조각의 화소를 그대로 본다.
+ * 그래야 조각 경계에 줄이 안 생긴다. */
 static void rest_line(const uint8_t *src, int n, int stride,
-                      uint8_t *dst, int dstride, int a, int b)
+                      uint8_t *dst, int dstride, int i0, int i1, int a, int b)
 {
     int c = 128 - 2 * a - 2 * b;
     int i;
-    for (i = 0; i < n; i++) {
+    for (i = i0; i < i1; i++) {
         int m2 = i - 2, m1 = i - 1, p1 = i + 1, p2 = i + 2;
         int v;
         if (m2 < 0) m2 = 0;
@@ -62,43 +67,52 @@ static void rest_line(const uint8_t *src, int n, int stride,
     }
 }
 
-/* rgb 를 제자리에서 거른다. tmp 는 화소 수 * 3 바이트짜리 일감이다. */
-void ingot_restore_rgb(uint8_t *rgb, int w, int h, int idx, uint8_t *tmp)
+/* src 의 한 조각만 걸러 dst 의 같은 자리에 쓴다. 참조는 언제나 src 이므로
+ * 조각마다 다른 번호를 골라도 서로의 결과를 안 본다 -- 인코더와 디코더가
+ * 같은 값을 얻는다. tmp 는 화소 수 * 3 바이트짜리 일감이다. */
+void ingot_restore_region(uint8_t *dst, const uint8_t *src, int w, int h,
+                          int ox, int oy, int rw, int rh, int idx, uint8_t *tmp)
 {
     int a, b, y, x, ch;
+    int y0, y1;
     if (idx <= 0 || idx > 15) return;
     a = ingot_rest_tab[idx][0];
     b = ingot_rest_tab[idx][1];
+    /* 세로 걸기가 위아래 두 줄을 보므로 가로 걸기를 그만큼 넓게 한다. */
+    y0 = oy - 2; if (y0 < 0) y0 = 0;
+    y1 = oy + rh + 2; if (y1 > h) y1 = h;
 
     for (ch = 0; ch < 3; ch++) {
-        /* 가로 */
-        for (y = 0; y < h; y++)
-            rest_line(rgb + ((size_t)y * w) * 3 + ch, w, 3,
-                      tmp + ((size_t)y * w) * 3 + ch, 3, a, b);
-        /* 세로 */
-        for (x = 0; x < w; x++)
+        for (y = y0; y < y1; y++)
+            rest_line(src + ((size_t)y * w) * 3 + ch, w, 3,
+                      tmp + ((size_t)y * w) * 3 + ch, 3, ox, ox + rw, a, b);
+        for (x = ox; x < ox + rw; x++)
             rest_line(tmp + (size_t)x * 3 + ch, h, (size_t)w * 3,
-                      rgb + (size_t)x * 3 + ch, (size_t)w * 3, a, b);
+                      dst + (size_t)x * 3 + ch, (size_t)w * 3,
+                      oy, oy + rh, a, b);
     }
 }
 
-/* 원본과 견주어 제곱오차가 가장 작은 번호를 고른다. 0 을 포함하므로
- * 어떤 그림에서도 필터 없는 판보다 나빠지지 않는다. */
+/* 한 조각에서 원본과 견주어 제곱오차가 가장 작은 번호를 고른다. 0 을
+ * 포함하므로 어떤 조각에서도 안 거른 판보다 나빠지지 않는다. */
 int ingot_restore_pick(const uint8_t *orig, const uint8_t *dec, int w, int h,
+                       int ox, int oy, int rw, int rh,
                        uint8_t *work, uint8_t *tmp)
 {
-    size_t n3 = (size_t)w * (size_t)h * 3;
-    int idx, best = 0;
+    int idx, best = 0, y, x, ch;
     int64_t bse = -1;
     for (idx = 0; idx < 16; idx++) {
-        size_t i;
         int64_t se = 0;
-        memcpy(work, dec, n3);
-        if (idx) ingot_restore_rgb(work, w, h, idx, tmp);
-        for (i = 0; i < n3; i++) {
-            int d = (int)work[i] - (int)orig[i];
-            se += (int64_t)d * d;
+        if (idx) {
+            ingot_restore_region(work, dec, w, h, ox, oy, rw, rh, idx, tmp);
         }
+        for (y = oy; y < oy + rh; y++)
+            for (x = ox; x < ox + rw; x++)
+                for (ch = 0; ch < 3; ch++) {
+                    size_t o = ((size_t)y * w + x) * 3 + ch;
+                    int d = (int)(idx ? work[o] : dec[o]) - (int)orig[o];
+                    se += (int64_t)d * d;
+                }
         if (bse < 0 || se < bse) { bse = se; best = idx; }
     }
     return best;

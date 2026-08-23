@@ -557,8 +557,35 @@ static const int16_t *dct_of(int n)
          : (n == 8) ? &ingot_dct8[0][0] : &ingot_dct16[0][0];
 }
 
+#if INGOT_ADST
+extern const int16_t ingot_adst4[4][4];
+extern const int16_t ingot_adst8[8][8];
+extern const int16_t ingot_adst16[16][16];
+#if INGOT_BLK32
+extern const int16_t ingot_adst32[32][32];
+#endif
+#if INGOT_BLK64
+extern const int16_t ingot_adst64[64][64];
+#endif
+
+static const int16_t *adst_of(int n)
+{
+#if INGOT_BLK64
+    if (n == 64) return &ingot_adst64[0][0];
+#endif
+#if INGOT_BLK32
+    if (n == 32) return &ingot_adst32[0][0];
+#endif
+    return (n == 4) ? &ingot_adst4[0][0]
+         : (n == 8) ? &ingot_adst8[0][0] : &ingot_adst16[0][0];
+}
+
+#define MAT_V(n, tx) (((tx) & 1) ? adst_of(n) : dct_of(n))
+#define MAT_H(n, tx) (((tx) & 2) ? adst_of(n) : dct_of(n))
+#else
 #define MAT_V(n, tx) (((void)(tx)), dct_of(n))
 #define MAT_H(n, tx) (((void)(tx)), dct_of(n))
+#endif
 
 void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n, int tx)
 {

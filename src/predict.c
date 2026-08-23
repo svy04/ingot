@@ -64,8 +64,37 @@ static int effective_mode(const ingot_neighbors *nb, int mode)
 }
 
 
-void ingot_predict(const ingot_neighbors *nb, int mode, int16_t *pred)
+#if INGOT_REFFILT
+/* [1,2,1]/4 로 한 줄을 고른다. 양 끝은 그대로 둔다 -- 모서리 값이 흐려지면
+ * 블록 경계가 어긋난다. */
+static void ref_smooth(int *v, int n, int corner, int has_corner)
 {
+    int t[INGOT_MAX_BLOCK], i;
+    if (n < 3) return;
+    t[0] = has_corner ? ((corner + 2 * v[0] + v[1] + 2) >> 2) : v[0];
+    for (i = 1; i < n - 1; i++)
+        t[i] = (v[i - 1] + 2 * v[i] + v[i + 1] + 2) >> 2;
+    t[n - 1] = v[n - 1];
+    for (i = 0; i < n; i++) v[i] = t[i];
+}
+#endif
+
+void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
+{
+#if INGOT_REFFILT
+    ingot_neighbors nbf;
+    const ingot_neighbors *nb = nb_in;
+    if (nb_in->n >= INGOT_REFFILT_MIN) {
+        nbf = *nb_in;
+        if (nbf.has_top)
+            ref_smooth(nbf.top, nbf.n, nbf.topleft, nbf.has_topleft);
+        if (nbf.has_left)
+            ref_smooth(nbf.left, nbf.n, nbf.topleft, nbf.has_topleft);
+        nb = &nbf;
+    }
+#else
+    const ingot_neighbors *nb = nb_in;
+#endif
     int n = nb->n, x, y, i;
 
     mode = effective_mode(nb, mode);

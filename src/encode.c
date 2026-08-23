@@ -96,7 +96,7 @@ static void store_recon(uint8_t *recon, int pw, int ph,
 
 /* 양자화까지 한 계수를 담고, 같은 값으로 복원 블록을 만든다.
  * w 가 NULL 이면 비트를 세기만 하고 아무것도 쓰지 않는다(시험 인코딩). */
-#if INGOT_SIGNHIDE
+#if INGOT_SIGNHIDE || INGOT_RDOQ
 /* 계수 하나를 적는 값의 어림자. 1/INGOT_BIT_UNIT 비트 눈금이다.
  * 모델을 안 보는 어림이지만 후보끼리 견주는 데는 충분하다 -- 크기가
  * 커지면 지수 골롬 접두부가 길어지고, 0 이면 깃발 하나로 끝난다. */
@@ -119,8 +119,8 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
     const uint16_t *zz = ingot_zigzag_of(n);
     int total = n * n, k, last = 0;
 
-#if !INGOT_SIGNHIDE
-    (void)lambda;      /* 부호 감추기를 꺼 두면 안 쓴다 */
+#if !INGOT_SIGNHIDE && !INGOT_RDOQ
+    (void)lambda;      /* 부호 감추기도 꼬리 절단도 꺼 두면 안 쓴다 */
 #endif
     ingot_fdct(resid, n, coef, n, tx);
 
@@ -131,6 +131,40 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
         z[k] = (int16_t)level;
         if (level != 0) last = k + 1;
     }
+
+#if INGOT_RDOQ
+    /* 꼬리를 자른다. 마지막 비영 계수를 0 으로 만들면 새 last 는 그 앞
+     * 비영 계수의 다음 자리가 되므로, 사이에 놓인 0 들의 깃발까지 한꺼번에
+     * 사라진다. 왜곡이 느는 값보다 버는 비트값이 크면 자르고, 이득이 있는
+     * 동안 되풀이한다. */
+    {
+        int guard = 0;
+        while (last > 0 && guard++ < total) {
+            int kk = last - 1, nl, j;
+            int64_t dd = 0, saved;
+            for (nl = kk; nl > 0 && z[nl - 1] == 0; nl--) ;
+            for (j = nl; j < last; j++) {
+                int jdx = zz[j];
+                int jstep = ingot_qstep_aq(base, jdx, n, plane, aqm);
+                int64_t e0 = (int64_t)coef[jdx]
+                           - ingot_dequantize(z[j], jstep);
+                int64_t e1 = (int64_t)coef[jdx];
+                dd += e1 * e1 - e0 * e0;
+            }
+            saved = sh_bits(z[kk])
+                  + ((int64_t)(kk - nl) * INGOT_RDOQ_ZBIT
+                     + INGOT_RDOQ_LBIT) * INGOT_BIT_UNIT / 16;
+            /* 계수 자리의 오차를 화소 자리로 옮기고, 모드를 고르는 자리와
+             * 같은 눈금(INGOT_RD_SCALE)에 올려 놓고 견준다. 이 둘을 빠뜨리면
+             * 왜곡을 수백 배 싸게 봐서 꼬리를 마구 자른다. */
+            dd = dd * ingot_tx_gain256(n) / 256;
+            if (dd * INGOT_RD_SCALE * 16
+                    >= lambda * saved * INGOT_RDOQ_LAM) break;
+            for (j = nl; j < last; j++) z[j] = 0;
+            last = nl;
+        }
+    }
+#endif
 
 #if INGOT_SIGNHIDE
     /* 마지막 비영 계수의 부호를 감춘다. 절댓값 합의 홀짝이 그 부호와
@@ -161,7 +195,11 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
                      * 오히려 커졌다(품질 63 에서 +3.2%). 계수 하나의 값을
                      * 대충 2*log2(|z|) + 2 로 보고, 0 에서 켜는 것은
                      * 「0 인가」 깃발까지 뒤집으므로 더 세게 친다. */
-                    cost = e1 * e1 - e0 * e0
+                    /* 계수 자리의 오차를 화소 자리로 옮기고 모드를 고르는
+                     * 자리와 같은 눈금에 올린다. 이 둘을 빠뜨리면 왜곡을
+                     * 수백 배 싸게 봐서 엉뚱한 계수를 옮긴다 (2026-08-24). */
+                    cost = (e1 * e1 - e0 * e0) * ingot_tx_gain256(n) / 256
+                         * INGOT_RD_SCALE
                          + lambda * (sh_bits(nv) - sh_bits(z[j]));
                     if (bestk < 0 || cost < bestcost) {
                         bestk = j; bestd = d; bestcost = cost;
@@ -861,6 +899,9 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
                 size_t src = data_off + (size_t)gi * slot;
                 if (dst != src) memmove(buf + dst, buf + src, glen[gi]);
 #if INGOT_TOC4
+#if INGOT_RESTORE
+                if (glen[gi] > 0x0FFFFFFFu) { st = INGOT_ERR_MEMORY; goto done; }
+#endif
                 ingot_put32(buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY,
                             (uint32_t)glen[gi]);
 #else
@@ -892,6 +933,46 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
      * 손상을 잡는다. 머리말 자체는 빼고 계산해야 여기에 써 넣을 수 있다. */
     ingot_put32(buf + 20, ingot_hash32(buf + INGOT_HEADER_SIZE,
                                        data_off - INGOT_HEADER_SIZE));
+
+#if INGOT_RESTORE
+    /* 자기 출력을 실제로 풀어서 조각마다 복원 필터를 고른다. 열다섯 후보를 다 걸어
+     * 보고 원본과의 제곱오차가 가장 작은 것을 쓴다. 0 번(필터 없음)이
+     * 후보에 있으므로 어떤 그림에서도 안 거른 판보다 나빠지지 않는다.
+     * 번호는 깃발 바이트의 남는 비트 넷에 담으므로 파일이 안 커진다.
+     * 해시는 머리말을 빼고 계산하므로 여기서 깃발을 고쳐도 어긋나지 않는다. */
+    {
+        uint8_t *drgb = NULL, *work = NULL, *tmp = NULL;
+        int dw = 0, dh = 0;
+        size_t n3 = (size_t)width * (size_t)height * 3;
+        if (ingot_decode(buf, data_off, &drgb, &dw, &dh) == INGOT_OK &&
+            dw == width && dh == height) {
+            work = (uint8_t *)malloc(n3);
+            tmp  = (uint8_t *)malloc(n3);
+            if (work && tmp) {
+                memcpy(work, drgb, n3);
+                for (gi = 0; gi < group_count; gi++) {
+                    uint32_t gx = gi % gx_count, gy = gi / gx_count;
+                    int ox = (int)gx * gsize, oy = (int)gy * gsize;
+                    int gw = width - ox, gh = height - oy;
+                    uint8_t *e = buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY;
+                    int pick;
+                    if (gw > gsize) gw = gsize;
+                    if (gh > gsize) gh = gsize;
+                    pick = ingot_restore_pick(rgb, drgb, width, height,
+                                              ox, oy, gw, gh, work, tmp);
+                    if (pick)
+                        ingot_put32(e, ingot_get32(e)
+                                       | ((uint32_t)pick << 28));
+                }
+                /* 목차를 고쳤으니 훑은 값을 다시 남긴다. */
+                ingot_put32(buf + 20,
+                            ingot_hash32(buf + INGOT_HEADER_SIZE,
+                                         data_off - INGOT_HEADER_SIZE));
+            }
+        }
+        free(work); free(tmp); free(drgb);
+    }
+#endif
 
     *out = buf;
     *out_size = data_off;

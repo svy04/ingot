@@ -193,6 +193,22 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #define INGOT_EDGEFIX 0
 #endif
 
+/* 예측에 쓰는 이웃 화소를 미리 평활화할지. 규격이 바뀌지만 **비트 대가가
+ * 0** 이다 -- 인코더와 디코더가 같은 이웃을 보고 같은 값을 만든다.
+ *
+ * 이웃 화소에는 그 블록을 담을 때 생긴 양자화 잡음이 남아 있다. 예측은
+ * 그 잡음을 블록 안으로 그대로 퍼뜨리므로, 잔차가 잡음만큼 커진다.
+ * [1,2,1]/4 로 한 번 고르면 잡음이 줄고 잔차가 작아진다. 블록이 클수록
+ * 예측이 멀리까지 미치므로 세게 건다. */
+#ifndef INGOT_REFFILT
+#define INGOT_REFFILT 0
+#endif
+
+/* 이 크기 이상일 때만 건다. */
+#ifndef INGOT_REFFILT_MIN
+#define INGOT_REFFILT_MIN 8
+#endif
+
 /* 색차의 넷째 모드를 「휘도에서 끌어오기」로 바꿀지. 규격이 바뀌지만
  * **비트 대가가 0** 이다 -- 모드 수가 그대로이고 기울기도 안 신호한다.
  *
@@ -228,10 +244,27 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
  *   6  3 번의 세로·가로를 뒤집은 것. 5 번과 같은 계기인데 평면 모드를 빼서
  *      방향만 남긴다 */
 
+/* 예측 모드에 맞춰 변환을 바꿀지. 규격이 바뀌지만 **비트 대가가 0** 이다 --
+ * 어느 변환을 쓸지는 모드에서 나오므로 따로 신호하지 않는다.
+ *
+ * 세로 예측은 위 행에서 내려오므로 아래로 갈수록 잔차가 커진다. 코사인
+ * 변환은 그 기울기를 여러 계수로 흩뿌리지만 사인 변환(DST-VII)은 한쪽 끝이
+ * 0 이라 몇 계수에 모은다. 가로 예측도 가로 방향에서 마찬가지다. */
+#ifndef INGOT_ADST
+#define INGOT_ADST 0
+#endif
+
+/* 아래 한 비트가 세로, 둘째 비트가 가로에 사인 변환을 쓴다는 뜻이다. */
 static inline int ingot_tx_of_mode(int mode)
 {
+#if INGOT_ADST
+    if (mode == INGOT_PRED_V) return 1;
+    if (mode == INGOT_PRED_H) return 2;
+    return 0;
+#else
     (void)mode;
     return 0;
+#endif
 }
 
 /* 실제로 담아 보는 모드 수. 나머지는 잔차 절대합 순위에서 걸러진다.
@@ -295,6 +328,39 @@ static inline int ingot_tx_of_mode(int mode)
  * 평균 0.9993 비트라 모델로는 못 줄인다(2026-08-23 실측). 그래서 모델을
  * 붙이는 대신 아예 안 적는 쪽으로 간다. 감추는 자리는 마지막 비영
  * 계수이고, 홀짝이 안 맞으면 계수 하나를 +-1 옮겨 맞춘다. */
+/* 꼬리 절단. 마지막 비영 계수를 없애면 그 계수의 크기·부호 비트와 그 앞에
+ * 놓인 0 들의 깃발이 함께 사라지고 last 값도 짧아진다. 왜곡이 느는 만큼을
+ * 비트값으로 사는지 견준다. **디코더도 확률표도 안 바뀐다.** */
+#ifndef INGOT_RDOQ
+#define INGOT_RDOQ 1
+#endif
+
+/* 0 깃발 하나의 값. 16 분모다 (8 이면 0.5 비트). */
+#ifndef INGOT_RDOQ_ZBIT
+#define INGOT_RDOQ_ZBIT 8
+#endif
+
+/* last 값이 짧아지면서 버는 몫. 16 분모다. */
+#ifndef INGOT_RDOQ_LBIT
+#define INGOT_RDOQ_LBIT 16
+#endif
+
+/* 꼬리를 자를 때 쓰는 무게. 16 분모다 (16 이면 인코더의 본래 무게 그대로). */
+#ifndef INGOT_RDOQ_LAM
+#define INGOT_RDOQ_LAM 3
+#endif
+
+/* 계수 자리의 오차 하나가 화소에서 얼마로 보이는지. 256 분모다.
+ * 우리 정수 변환은 크기마다 시프트가 달라 이 배율이 크기마다 다르다 --
+ * 계수 오차를 그대로 화소 왜곡처럼 쓰면 크기마다 다른 만큼 어긋난다.
+ * 임의 잔차 200판마다 계수 하나를 0 으로 만들고 화소에서 벌어진 제곱합을
+ * 재서 굳혔다 (2026-08-24). */
+static inline int ingot_tx_gain256(int n)
+{
+    return (n == 4) ? 16 : (n == 8) ? 17 : (n == 16) ? 22
+         : (n == 32) ? 25 : 71;
+}
+
 #ifndef INGOT_SIGNHIDE
 #define INGOT_SIGNHIDE 0
 #endif
@@ -523,6 +589,35 @@ static inline int ingot_dequantize(int level, int step)
 #define INGOT_AQ_HI 16
 #endif
 
+/* 고주파 가중을 품질에 따라 낮출지. 규격이 바뀌지만 **비트 대가가 0** 이다 --
+ * 디코더도 품질에서 같은 눈금을 구한다.
+ *
+ * 같은 PSNR 에서 AVIF 와 견주니 저품질에서는 1.11~1.25 배인데 고품질에서는
+ * 1.3~1.96 배로 벌어졌다 (2026-08-24 실측, 여덟 장). 고주파를 3.3 배까지
+ * 거칠게 버리는 것이 고품질에서 제곱오차를 크게 깎기 때문일 수 있다.
+ * 눈금이 고와지면(고품질이면) 가중을 같이 낮춘다. */
+#ifndef INGOT_QW_QADAPT
+#define INGOT_QW_QADAPT 0
+#endif
+
+/* 가중을 온전히 쓰기 시작하는 눈금. 이보다 고와지면 비례해서 낮춘다. */
+#ifndef INGOT_QW_QREF
+#define INGOT_QW_QREF 131
+#endif
+
+static inline int ingot_qw_alpha(int base)
+{
+#if INGOT_QW_QADAPT
+    int a;
+    if (base >= INGOT_QW_QREF) return INGOT_QW_ALPHA16;
+    a = INGOT_QW_ALPHA16 * base / INGOT_QW_QREF;
+    return a;
+#else
+    (void)base;
+    return INGOT_QW_ALPHA16;
+#endif
+}
+
 static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 {
     int u = idx % n, v = idx / n;
@@ -531,7 +626,7 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 #else
     int pos = u + v;
 #endif
-    int s = (base * (256 + INGOT_QW_ALPHA16 * pos)) >> 8;
+    int s = (base * (256 + ingot_qw_alpha(base) * pos)) >> 8;
     if (plane) s = (s * INGOT_QW_CHROMA) >> 4;
     return s < 1 ? 1 : s;
 }
@@ -627,6 +722,14 @@ static inline int ingot_abs_i(int v) { return v < 0 ? -v : v; }
 /* 자리 (u, v) 의 왼쪽·위·왼쪽위에 이미 담긴 계수의 크기를 모은다.
  * 셋 다 지그재그 순서상 반드시 앞이라 디코더도 같은 값을 안다.
  * lvl 은 자리별로 담긴 값을 그대로 둔 배열이다. */
+/* 「0 인가」 깃발은 고품질에서 파일의 36.6% 를 쓴다 (2026-08-24 실측).
+ * 그 문맥을 정하는 것이 이 이웃 합이다. 셋만 보던 것을 다섯으로 넓힌다 --
+ * 두 칸 왼쪽과 두 칸 위도 이미 담은 자리라 디코더가 같은 값을 구한다.
+ * **비트 대가가 0** 이고, 합이 커지므로 단계 경계도 같이 넓힌다. */
+#ifndef INGOT_NB5
+#define INGOT_NB5 1
+#endif
+
 static inline int ingot_nb2d(const int16_t *lvl, int idx, int n)
 {
     int u = idx % n, v = idx / n, s = 0;
@@ -634,18 +737,41 @@ static inline int ingot_nb2d(const int16_t *lvl, int idx, int n)
     if (v > 0)            s += lvl[idx - n] < 0 ? -lvl[idx - n] : lvl[idx - n];
     if (u > 0 && v > 0)   s += lvl[idx - n - 1] < 0 ? -lvl[idx - n - 1]
                                                     : lvl[idx - n - 1];
+#if INGOT_NB5
+    if (u > 1)            s += lvl[idx - 2] < 0 ? -lvl[idx - 2] : lvl[idx - 2];
+    if (v > 1)            s += lvl[idx - 2 * n] < 0 ? -lvl[idx - 2 * n]
+                                                    : lvl[idx - 2 * n];
+#endif
     return s;
 }
 
 static inline int ingot_ctx_level(int nb)
 {
-#if INGOT_NBLEV >= 7
+#if INGOT_NBLEV >= 9
+    /* 이웃을 다섯으로 넓히면 합의 폭이 커진다. 그만큼 단계를 잘게 나눌
+     * 여지가 생긴다. 다만 무리가 늘면 표본이 갈리므로 재서 정한다. */
     if (nb == 0) return 0;
     if (nb <= 1) return 1;
     if (nb <= 2) return 2;
+    if (nb <= 3) return 3;
+    if (nb <= 5) return 4;
+    if (nb <= 8) return 5;
+    if (nb <= 13) return 6;
+    if (nb <= 22) return 7;
+    return 8;
+#elif INGOT_NBLEV >= 7
+    if (nb == 0) return 0;
+    if (nb <= 1) return 1;
+    if (nb <= 2) return 2;
+#if INGOT_NB5
+    if (nb <= 5) return 3;
+    if (nb <= 10) return 4;
+    if (nb <= 18) return 5;
+#else
     if (nb <= 4) return 3;
     if (nb <= 7) return 4;
     if (nb <= 12) return 5;
+#endif
     return 6;
 #elif INGOT_NBLEV >= 5
     if (nb == 0) return 0;
@@ -810,6 +936,33 @@ static inline int ingot_ctx_last_e(int plane, int n, int prev_empty)
  * 중 하나를 적는다. 둘 다 블록 크기(4·8·16)로만 갈린다 — 3 + 21 = 24 자리다. */
 /* 쓸 수 있는 모드가 둘뿐인 자리(조각의 맨 위 줄·맨 왼쪽 줄)는 한 비트로
  * 끝난다. 그 비트의 뜻이 네 모드일 때의 첫 비트와 다르므로 자리를 따로 둔다. */
+/* ---- 복원 필터 (restore.c) ----
+ *
+ * 블록 경계 필터 다음에 오는 두 번째 필터다. 계수를 실어 보내지 않고 미리
+ * 정한 열다섯 개 중 고른 번호만 깃발 바이트의 남는 비트 넷에 담는다 --
+ * **비트 대가가 0** 이다. 인코더가 자기 출력을 실제로 풀어서 제곱오차가
+ * 가장 작은 것을 고르고, 0 번(필터 없음)이 후보에 있으므로 손해가 날 수
+ * 없다. */
+#ifndef INGOT_RESTORE
+#define INGOT_RESTORE 0
+#endif
+
+void ingot_restore_region(uint8_t *dst, const uint8_t *src, int w, int h,
+                          int ox, int oy, int rw, int rh, int idx, uint8_t *tmp);
+int ingot_restore_pick(const uint8_t *orig, const uint8_t *dec, int w, int h,
+                       int ox, int oy, int rw, int rh,
+                       uint8_t *work, uint8_t *tmp);
+
+/* 조각 번호는 목차 항목의 위 네 비트에 얹는다. 조각 하나가 256MB 를 넘을
+ * 일이 없으므로 길이는 아래 스물여덟 비트로 넉넉하다. */
+#if INGOT_RESTORE
+#define INGOT_TOC_LEN(v)  ((v) & 0x0FFFFFFFu)
+#define INGOT_TOC_FILT(v) ((int)((v) >> 28))
+#else
+#define INGOT_TOC_LEN(v)  (v)
+#define INGOT_TOC_FILT(v) 0
+#endif
+
 /* ---- 블록 경계 필터 (loopfilter.c) ----
  * 조각을 다 푼 뒤 그 조각 안에서만 돈다. 예측은 필터 전 화소를 보므로
  * 인코더는 이 파일을 안 쓴다. 손잡이는 재서 정한다. */
