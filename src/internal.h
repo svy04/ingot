@@ -192,6 +192,24 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #ifndef INGOT_EDGEFIX
 #define INGOT_EDGEFIX 0
 #endif
+
+/* 색차의 넷째 모드를 「휘도에서 끌어오기」로 바꿀지. 규격이 바뀌지만
+ * **비트 대가가 0** 이다 -- 모드 수가 그대로이고 기울기도 안 신호한다.
+ *
+ * 같은 자리의 휘도는 색차보다 먼저 복원되므로 디코더도 이미 안다. 색차가
+ * 휘도와 함께 밝아지고 어두워지는 자리에서는 그 관계를 쓰면 예측이 훨씬
+ * 잘 맞는다. 기울기와 절편은 위 행과 왼쪽 열의 (휘도, 색차) 짝을 최소제곱
+ * 으로 맞춰 뽑는다. 4:4:4 라 휘도와 색차가 같은 자리에 있어 내려받기가
+ * 필요 없다. 휘도는 매끄러운 보간 그대로다.
+ *
+ * **재서 크게 졌다: +77.81 / +13.01 / +72.52** (2026-08-23). 비트는 5%
+ * 아끼는데 화질이 무너진다 -- Big_Easy_chair 품질 20 에서 8.52 dB 를
+ * 잃는다. 색이 단조로운 그림에서 이웃 휘도가 평평하면 최소제곱 기울기의
+ * 분모가 작아 값이 튀고, 그 튄 기울기를 블록 전체에 곱하기 때문이라고
+ * 본다(추정). 쓰려면 기울기가 못 미더울 때 물러설 길이 필요하다. */
+#ifndef INGOT_CFL
+#define INGOT_CFL 0
+#endif
 #define INGOT_PRED_COUNT  4
 
 /* ---- 예측 모드 -> 변환 종류 ----
@@ -347,10 +365,44 @@ typedef struct {
     int n;                      /* 블록 한 변. 4 부터 INGOT_MAX_BLOCK 까지 */
     int top[INGOT_MAX_BLOCK], left[INGOT_MAX_BLOCK], topleft;
     int has_top, has_left, has_topleft;
+#if INGOT_CFL
+    /* 색차를 담을 때만 채운다. 같은 자리의 휘도 복원값이다. */
+    const uint8_t *luma;    /* 휘도 평면. 색차가 아니면 NULL */
+    int luma_stride, bx, by, pw, ph;
+#endif
 } ingot_neighbors;
 
 /* recon 은 지금까지 복원된 평면이다. gx0·gy0 는 조각의 원점이라
  * 그보다 위·왼쪽은 이웃으로 쓰지 않는다. */
+/* 이 블록이 매끈한 자리인지 결이 많은 자리인지 이웃만 보고 잰다.
+ * 위 행과 왼쪽 열의 평균 |2차 차분| 이다. 이미 복원된 화소만 보므로
+ * 디코더가 같은 값을 구한다. 돌려주는 것은 양자화 세기 배수(16 분모)로,
+ * 매끈하면 16 보다 크고(거칠게) 결이 많으면 작다(곱게). */
+static inline int ingot_aq_mul(const ingot_neighbors *nb)
+{
+#if INGOT_AQ
+    int i, n = nb->n, s = 0, cnt = 0;
+    if (nb->has_top)
+        for (i = 1; i < n - 1; i++) {
+            int d = 2 * nb->top[i] - nb->top[i - 1] - nb->top[i + 1];
+            s += d < 0 ? -d : d; cnt++;
+        }
+    if (nb->has_left)
+        for (i = 1; i < n - 1; i++) {
+            int d = 2 * nb->left[i] - nb->left[i - 1] - nb->left[i + 1];
+            s += d < 0 ? -d : d; cnt++;
+        }
+    if (cnt == 0) return 16;
+    s /= cnt;
+    if (s <= INGOT_AQ_LO) return 16 + INGOT_AQ_STR;
+    if (s >= INGOT_AQ_HI) return 16 - INGOT_AQ_STR;
+    return 16;
+#else
+    (void)nb;
+    return 16;
+#endif
+}
+
 void ingot_gather_neighbors(const uint8_t *recon, int pw, int ph,
                             int bx, int by, int gx0, int gy0, int n,
                             ingot_neighbors *nb);
@@ -434,14 +486,19 @@ static inline int ingot_dequantize(int level, int step)
 #define INGOT_QW_ALPHA 1
 #endif
 #ifndef INGOT_QW_CHROMA
-#define INGOT_QW_CHROMA 20
+#define INGOT_QW_CHROMA 24   /* 지각 카드. 위 ALPHA16 주석 참조 */
 #endif
 
 /* 같은 기울기를 1/16 눈금으로 적는 자리. 기본값은 INGOT_QW_ALPHA 를 그대로
  * 옮긴 것이라 지금 판과 비트까지 같다. 정수 ALPHA 는 1 과 2 사이를 못 재는데
  * 그 사이가 궁금할 때 이쪽을 쓴다 (예: -DINGOT_QW_ALPHA16=20 이면 1.25). */
 #ifndef INGOT_QW_ALPHA16
-#define INGOT_QW_ALPHA16 (INGOT_QW_ALPHA * 16)
+/* 16 이었다가 20 으로 올렸다 (2026-08-23 밤). 지각을 사고 제곱 오차를
+ * 파는 거래인데, 색차 가중 24·필터 세기 6 과 **함께** 걸면 대가가 절반이
+ * 된다 -- 셋을 따로 재면 지각 -2.86 / PSNR +1.00 이지만 함께 재면
+ * 지각 -2.76 / PSNR +0.48 이다. 셋이 같은 화소를 서로 다른 방향에서
+ * 건드려서 손해가 안 더해진다고 본다(추정). */
+#define INGOT_QW_ALPHA16 20
 #endif
 
 /* 고주파 가중의 자리를 블록 크기로 맞출지. 규격이 바뀐다.
@@ -463,6 +520,31 @@ static inline int ingot_dequantize(int level, int step)
 #define INGOT_QW_NORM 1
 #endif
 
+/* 자리마다 양자화 세기를 바꿀지. 규격이 바뀌지만 **비트 대가가 0** 이다 --
+ * 세기를 이미 복원된 이웃에서 재므로 디코더가 같은 값을 구한다.
+ *
+ * libjxl 의 적응 양자화를 읽고 만들었다. 거기서 재는 값은 분산이 아니라
+ * 이웃과의 차이(라플라시안)이고, 조절 대상은 λ 가 아니라 양자화 스텝
+ * 자체이며, 방향은 **매끈한 자리를 거칠게, 결이 많은 자리를 곱게** 다.
+ * 우리가 여섯 번 재서 여섯 번 진 것은 분산으로 λ 를 조절하는 것이었다 --
+ * 재는 값도 조절 대상도 다르다. */
+#ifndef INGOT_AQ
+#define INGOT_AQ 0
+#endif
+
+/* 세기를 얼마나 흔들지. 16 분모다 (2 면 ±12.5%). */
+#ifndef INGOT_AQ_STR
+#define INGOT_AQ_STR 2
+#endif
+
+/* 매끈함·거칢을 가르는 문턱. 평균 |2차 차분| 이다. */
+#ifndef INGOT_AQ_LO
+#define INGOT_AQ_LO 4
+#endif
+#ifndef INGOT_AQ_HI
+#define INGOT_AQ_HI 16
+#endif
+
 static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 {
     int u = idx % n, v = idx / n;
@@ -473,6 +555,18 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 #endif
     int s = (base * (256 + INGOT_QW_ALPHA16 * pos)) >> 8;
     if (plane) s = (s * INGOT_QW_CHROMA) >> 4;
+    return s < 1 ? 1 : s;
+}
+
+/* 위 함수에 블록마다의 세기 배수를 얹은 것. 배수는 16 분모다. */
+static inline int ingot_qstep_aq(int base, int idx, int n, int plane, int aqm)
+{
+    int s = ingot_qstep_at(base, idx, n, plane);
+#if INGOT_AQ
+    s = (s * aqm) >> 4;
+#else
+    (void)aqm;
+#endif
     return s < 1 ? 1 : s;
 }
 
@@ -703,7 +797,7 @@ static inline int ingot_ctx_last_n(int plane, int n)
 #define INGOT_LF_BETA 16    /* beta = (step * BETA) >> 5. 평탄 판정 문턱 */
 #endif
 #ifndef INGOT_LF_TC
-#define INGOT_LF_TC 8       /* tc = (step * TC) >> 7. 고칠 수 있는 최대치 */
+#define INGOT_LF_TC 6       /* tc = (step * TC) >> 7. 지각 카드 */
 #endif
 
 void ingot_loopfilter(uint8_t *pl, int pw, int ox, int oy, int gw, int gh,

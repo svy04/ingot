@@ -46,6 +46,11 @@ void ingot_gather_neighbors(const uint8_t *recon, int pw, int ph,
     }
     nb->topleft = nb->has_topleft
         ? (int)recon[(size_t)(by - 1) * pw + (bx - 1)] : 128;
+#if INGOT_CFL
+    nb->luma = NULL;
+    nb->luma_stride = 0;
+    nb->bx = bx; nb->by = by; nb->pw = pw; nb->ph = ph;
+#endif
 }
 
 /* 실제로 쓸 모드를 정한다. 쓸 수 없으면 DC 로 떨어진다. */
@@ -112,6 +117,66 @@ void ingot_predict(const ingot_neighbors *nb, int mode, int16_t *pred)
 #endif
         return;
     }
+
+#if INGOT_CFL
+    /* 색차이고 휘도를 받았으면 휘도에서 끌어온다. 기울기·절편은 위 행과
+     * 왼쪽 열의 (휘도, 색차) 짝에서 최소제곱으로 뽑는다 -- 양쪽이 같은
+     * 값을 보므로 신호할 것이 없다. */
+    if (nb->luma) {
+        const uint8_t *L = nb->luma;
+        int ls = nb->luma_stride, bx = nb->bx, by = nb->by;
+        int cnt = 0;
+        int64_t sx = 0, sy = 0, sxx = 0, sxy = 0;
+        if (nb->has_top) {
+            for (i = 0; i < n; i++) {
+                int tx = bx + i;
+                int lv, cv;
+                if (tx >= nb->pw) tx = nb->pw - 1;
+                lv = (int)L[(size_t)(by - 1) * ls + tx];
+                cv = nb->top[i];
+                sx += lv; sy += cv; sxx += (int64_t)lv * lv;
+                sxy += (int64_t)lv * cv; cnt++;
+            }
+        }
+        if (nb->has_left) {
+            for (i = 0; i < n; i++) {
+                int ly = by + i;
+                int lv, cv;
+                if (ly >= nb->ph) ly = nb->ph - 1;
+                lv = (int)L[(size_t)ly * ls + (bx - 1)];
+                cv = nb->left[i];
+                sx += lv; sy += cv; sxx += (int64_t)lv * lv;
+                sxy += (int64_t)lv * cv; cnt++;
+            }
+        }
+        if (cnt >= 2) {
+            int64_t den = (int64_t)cnt * sxx - sx * sx;
+            /* 기울기를 1/64 눈금 정수로 들고 다닌다. 분모가 0 이면
+             * 이웃 휘도가 평평하다는 뜻이라 기울기를 0 으로 둔다. */
+            int64_t a64 = 0;
+            int64_t b;
+            if (den != 0) {
+                a64 = (((int64_t)cnt * sxy - sx * sy) * 64) / den;
+                if (a64 >  256) a64 =  256;      /* 4.0 배로 묶는다 */
+                if (a64 < -256) a64 = -256;
+            }
+            b = (sy * 64 - a64 * sx) / cnt;
+            for (y = 0; y < n; y++) {
+                int sy2 = by + y;
+                if (sy2 >= nb->ph) sy2 = nb->ph - 1;
+                for (x = 0; x < n; x++) {
+                    int sx2 = bx + x;
+                    int v;
+                    if (sx2 >= nb->pw) sx2 = nb->pw - 1;
+                    v = (int)((a64 * (int64_t)L[(size_t)sy2 * ls + sx2]
+                               + b + 32) >> 6);
+                    pred[y * n + x] = (int16_t)ingot_clamp_u8(v);
+                }
+            }
+            return;
+        }
+    }
+#endif
 
 #if INGOT_SMOOTH
     /* 매끄러운 보간. 화소마다 위·왼쪽·오른쪽 끝·아래 끝을 거리로 섞는다.

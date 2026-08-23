@@ -87,7 +87,7 @@ ingot_status ingot_probe(const uint8_t *data, size_t size, int *width, int *heig
 
 /* 잔차 블록 하나를 읽어 역변환까지 한다. 규격을 벗어나면 0 이 아닌 값을 돌려준다. */
 static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
-                         uint16_t *probs, int16_t *back, int tx)
+                         uint16_t *probs, int16_t *back, int tx, int aqm)
 {
     int16_t deq[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
     const uint16_t *zz = ingot_zigzag_of(n);
@@ -108,7 +108,7 @@ static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
 
     for (k = 0; k < (int)last; k++) {
         int idx = zz[k];
-        int step = ingot_qstep_at(base, idx, n, plane);
+        int step = ingot_qstep_aq(base, idx, n, plane, aqm);
         int lvl = ingot_ctx_level(ingot_nb2d(placed, idx, n));
         /* k == last-1 이면 이 계수가 0 이 아닌 것을 여기서도 안다.
          * last 가 「마지막 비영 계수의 다음 자리」이기 때문이다.
@@ -176,7 +176,8 @@ static void store_block(uint8_t *plane, int pw, int ph,
 static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                       int bx, int by, int gx0, int gy0, int n,
                       int base, int p, uint16_t *probs, int *pmode,
-                      uint8_t *map, int ms)
+                      uint8_t *map, int ms,
+                      const uint8_t *luma, int lstride)
 {
     int16_t pred[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
             back[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
@@ -186,6 +187,11 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
     int total = n * n, k;
 
     ingot_gather_neighbors(plane, pw, ph, bx, by, gx0, gy0, n, &nb);
+#if INGOT_CFL
+    if (p && luma) { nb.luma = luma; nb.luma_stride = lstride; }
+#else
+    (void)luma; (void)lstride;
+#endif
     {
         /* 네 모드: 앞 블록의 모드를 문맥으로 두 비트. */
         int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
@@ -199,7 +205,8 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
     ingot_predict(&nb, (int)mode, pred);
 
     if (read_residual(r, base, n, p, probs, back,
-                      ingot_tx_of_mode((int)mode))) return 1;
+                      ingot_tx_of_mode((int)mode), ingot_aq_mul(&nb)))
+        return 1;
 
     for (k = 0; k < total; k++)
         out[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
@@ -221,27 +228,30 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
 static int read_quad(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                      int bx, int by, int gx0, int gy0, int n,
                      int base, int p, uint16_t *probs, int *pmode,
-                     uint8_t *map, int ms)
+                     uint8_t *map, int ms,
+                     const uint8_t *luma, int lstride)
 {
     int i, h = n >> 1, sidx = INGOT_SPLIT_IDX(n);
 
     if (n <= INGOT_MIN_BLOCK)
         return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p,
-                          probs, pmode, map, ms);
+                          probs, pmode, map, ms, luma, lstride);
 
     if (!ingot_rc_dec_bit(r, &probs[INGOT_PROB_SPLIT + sidx])) {
         if (r->error) return 1;
         return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p,
-                          probs, pmode, map, ms);
+                          probs, pmode, map, ms, luma, lstride);
     }
     if (r->error) return 1;
     for (i = 0; i < 4; i++)
         if (read_quad(r, plane, pw, ph, bx + (i & 1) * h, by + (i >> 1) * h,
-                      gx0, gy0, h, base, p, probs, pmode, map, ms)) return 1;
+                      gx0, gy0, h, base, p, probs, pmode, map, ms,
+                      luma, lstride)) return 1;
     return 0;
 }
 
-static int read_plane_group(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
+static int read_plane_group(ingot_rc_dec *r, uint8_t *plane,
+                            const uint8_t *luma, int lstride, int pw, int ph,
                             int ox, int oy, int gw, int gh,
                             int base, int p, uint16_t *probs,
                             uint8_t *map, int ms, int lf)
@@ -251,7 +261,7 @@ static int read_plane_group(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
     for (my = 0; my < gh; my += INGOT_MAX_BLOCK)
         for (mx = 0; mx < gw; mx += INGOT_MAX_BLOCK)
             if (read_quad(r, plane, pw, ph, ox + mx, oy + my, ox, oy,
-                          INGOT_MAX_BLOCK, base, p, probs, &pmode, map, ms))
+                          INGOT_MAX_BLOCK, base, p, probs, &pmode, map, ms, luma, lstride))
                 return 1;
     if (lf) ingot_loopfilter(plane, pw, ox, oy, gw, gh, map, ms, base, p ? 1 : 0);
     return 0;
@@ -383,12 +393,15 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         ingot_rc_dec_init(&r, data + off, len);
         ingot_prob_reset(probs, INGOT_PROB_COUNT);
 
-        if (read_plane_group(&r, plane[0], h.width, h.height, ox, oy, gw, gh,
+        if (read_plane_group(&r, plane[0], NULL, 0, h.width, h.height,
+                             ox, oy, gw, gh,
                              qbase, 0, probs, lfmap, lfms, h.lf)) {
             st = INGOT_ERR_BITSTREAM; goto done;
         }
         for (p = 1; p < 3; p++) {
-            if (read_plane_group(&r, plane[p], h.cw, h.ch, cox, coy, cgw, cgh,
+            if (read_plane_group(&r, plane[p],
+                                 h.sub ? NULL : plane[0], h.width,
+                                 h.cw, h.ch, cox, coy, cgw, cgh,
                                  qbase, p, probs, lfmap, lfms, h.lf)) {
                 st = INGOT_ERR_BITSTREAM; goto done;
             }
