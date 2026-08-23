@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/svy04/ingot/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-087ea3" alt="라이선스 Apache-2.0"></a>
   <a href="https://github.com/svy04/ingot/stargazers"><img src="https://img.shields.io/github/stars/svy04/ingot?color=087ea3&label=%E2%98%85" alt="스타"></a>
-  <img src="https://img.shields.io/badge/C99-2%2C468%20lines-087ea3" alt="2,468 lines of C99">
+  <img src="https://img.shields.io/badge/C99-2%2C643%20lines-087ea3" alt="2,643 lines of C99">
   <img src="https://img.shields.io/badge/deps-libc%20only-5d6e73" alt="의존성 없음">
 </p>
 
