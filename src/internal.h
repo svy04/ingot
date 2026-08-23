@@ -55,7 +55,29 @@
 #define INGOT_FWD_SHIFT4  14
 #define INGOT_INV_SHIFT4  18
 /* 가장 큰 블록과 가장 작은 블록. 16 -> 8 -> 4 로 나뉜다. */
+/* 가장 큰 블록을 32x32 까지 넓힐지. 규격이 바뀐다.
+ * AVIF 는 32·64 까지 쓰는데 우리는 16 에서 멈춰 있었다. 매끈한 자리에서는
+ * 큰 변환 하나가 작은 변환 넷보다 싸다. 확률표를 양쪽 다 따로 배워 재니
+ * **-2.86 / -3.90 / -3.07%** 였다 (2026-08-23). 켜면 문맥 칸이 702 에서
+ * 719 로 늘므로 표를 다시 배워야 한다. */
+#ifndef INGOT_BLK32
+#define INGOT_BLK32 1
+#endif
+
+/* 32 점 변환의 눈금. 손잡이를 꺼도 정의해 둔다 -- 변환의 삼항식이 이름을
+ * 언제나 참조하기 때문이다. n 이 32 일 때만 쓰인다.
+ * 상수 블록의 DC 가 직교 기준의 4.00 배가 되게 맞췄다(16x16 과 같은 값이라
+ * 같은 양자화 스텝이 같은 세기를 뜻한다). 무작위 잔차 60 블록 실측으로
+ * 왕복 오차 최대 6·제곱평균제곱근 1.61 (16x16 은 5 와 1.27), 순변환 누산
+ * 최대는 int32 한계의 4.1% 다. */
+#define INGOT_FWD_SHIFT32 15
+#define INGOT_INV_SHIFT32 19
+
+#if INGOT_BLK32
+#define INGOT_MAX_BLOCK   32
+#else
 #define INGOT_MAX_BLOCK   16
+#endif
 #ifndef INGOT_MIN_BLOCK
 #define INGOT_MIN_BLOCK 4
 #endif
@@ -217,8 +239,8 @@ static inline int ingot_tx_of_mode(int mode)
 #endif
 
 typedef struct {
-    int n;                      /* 블록 한 변. 8 또는 16 */
-    int top[16], left[16], topleft;
+    int n;                      /* 블록 한 변. 4 부터 INGOT_MAX_BLOCK 까지 */
+    int top[INGOT_MAX_BLOCK], left[INGOT_MAX_BLOCK], topleft;
     int has_top, has_left, has_topleft;
 } ingot_neighbors;
 
@@ -329,10 +351,11 @@ static inline int ingot_dequantize(int level, int step)
  * 변환 눈금에서 똑같은 결함을 찾아 고친 적이 있다 (2026-08-23, 16x16 만
  * 배수가 2.00 이던 건). 이쪽도 같은 자리다.
  *
- * 켜면 자리를 16 눈금으로 옮긴다: (u+v)*16/n. 16x16 은 지금과 똑같고
- * 나머지 크기가 같은 자로 맞춰진다. */
+ * 자리를 16 눈금으로 옮긴다: (u+v)*16/n. 16x16 은 옛 판과 똑같고 나머지
+ * 크기가 같은 자로 맞춰진다. **-3.02 / -2.46 / -2.01%** (2026-08-23) 로
+ * 그날 가장 큰 한 수였다. */
 #ifndef INGOT_QW_NORM
-#define INGOT_QW_NORM 0
+#define INGOT_QW_NORM 1
 #endif
 
 static inline int ingot_qstep_at(int base, int idx, int n, int plane)
@@ -363,9 +386,20 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 #define INGOT_NBLEV 5
 #endif
 
+#if INGOT_BLK32
+/* 32 를 켜면 크기 무리가 하나 는다. BYSIZE==1 은 「16 인가」였으니
+ * 「16 이상인가」로 넓히고, BYSIZE==2 는 32 를 제 무리로 둔다. */
+#define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 4 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
+#else
 #define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 3 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
+#endif
 #define INGOT_CTX_BASE  (INGOT_CTX_SIZES * 4 * INGOT_NBLEV * 2)
-#define INGOT_CTX_COUNT (INGOT_CTX_BASE + 6)
+#if INGOT_BLK32
+#define INGOT_CTX_LASTN 4
+#else
+#define INGOT_CTX_LASTN 3
+#endif
+#define INGOT_CTX_COUNT (INGOT_CTX_BASE + INGOT_CTX_LASTN * 2)
 /* 지그재그 자리와 평면으로 무리를 고른다.
  * 블록 크기가 달라도 같은 무리를 쓰도록 자리를 64칸 눈금으로 옮긴다. */
 static inline int ingot_abs_i(int v) { return v < 0 ? -v : v; }
@@ -421,10 +455,10 @@ static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
     /* 같은 대역이라도 4x4 의 셋째 계수와 16x16 의 마흔째 계수는 분포가
      * 다르다. last 를 크기별로 가른 것이 크게 먹혔으므로 여기도 가른다. */
 #if INGOT_CTX_BYSIZE == 2
-    int sz = (n == 4) ? 0 : (n == 8) ? 1 : 2;
+    int sz = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2 : 3;
     return ((sz * 4 + band) * INGOT_NBLEV + lvl) + (plane ? (INGOT_CTX_BASE / 2) : 0);
 #else
-    int sz = (n == 16) ? 1 : 0;
+    int sz = (n >= 16) ? 1 : 0;
     return ((sz * 4 + band) * INGOT_NBLEV + lvl) + (plane ? (INGOT_CTX_BASE / 2) : 0);
 #endif
 #else
@@ -437,7 +471,7 @@ static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
  * 16x16 은 수십까지 간다. 그래서 크기별로 무리를 갈라 둔다. */
 static inline int ingot_ctx_last_n(int plane, int n)
 {
-    int sz = (n == 4) ? 0 : (n == 8) ? 1 : 2;
+    int sz = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2 : 3;
     return INGOT_CTX_BASE + sz * 2 + (plane ? 1 : 0);
 }
 
@@ -453,7 +487,18 @@ static inline int ingot_ctx_last_n(int plane, int n)
  * 무리 뒤에 분할 2개(16→8, 8→4)와 모드 12개(앞 블록 모드 4 × 트리 3)를 더한다. */
 #define INGOT_PROB_PER_CTX 8
 #define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
-#define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + 2)   /* 16->8 과 8->4, 둘 */
+#if INGOT_BLK32
+#define INGOT_SPLIT_LEVELS 3                        /* 32->16, 16->8, 8->4 */
+#else
+#define INGOT_SPLIT_LEVELS 2                        /* 16->8 과 8->4 */
+#endif
+#define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + INGOT_SPLIT_LEVELS)
+/* 나눔 비트의 모델 자리. 큰 크기부터 0 번이다. */
+#if INGOT_BLK32
+#define INGOT_SPLIT_IDX(n) ((n) == 32 ? 0 : (n) == 16 ? 1 : 2)
+#else
+#define INGOT_SPLIT_IDX(n) ((n) == 16 ? 0 : 1)
+#endif
 /* 모드 비트는 앞 블록의 모드를 문맥으로 쓴다. 모드가 넷이므로 3 자리씩 넷.
  *
  * 방향 예측을 켜면 모드가 여덟이라 이 배치를 그대로 못 쓴다. 앞 블록 모드를

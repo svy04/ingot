@@ -114,7 +114,8 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
                           const int16_t *pred, int16_t *recon, int tx,
                           int64_t lambda)
 {
-    int16_t coef[256], z[256], deq[256], back[256];
+    int16_t coef[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK], z[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
+            deq[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK], back[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
     const uint16_t *zz = ingot_zigzag_of(n);
     int total = n * n, k, last = 0;
 
@@ -181,7 +182,7 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
     ingot_bitcat = INGOT_BC_ZERO;
 #endif
     {
-        int16_t placed[256];
+        int16_t placed[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
         for (k = 0; k < total; k++) placed[k] = 0;
         for (k = 0; k < last; k++) {
             int idx = zz[k];
@@ -301,7 +302,11 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                           int n, int base, int plane, uint16_t *probs,
                           int *pmode, int64_t lambda)
 {
-    int16_t src[256], pred[256], best_pred[256], resid[256], out[256];
+    int16_t src[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
+            pred[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
+            best_pred[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
+            resid[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
+            out[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
     ingot_neighbors nb;
     uint16_t trial_p[INGOT_PROB_COUNT];
     ingot_rc_enc trial;
@@ -435,7 +440,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     uint8_t scratch[1];
     ingot_rc_enc trial;
     int64_t cost_whole, cost_split = 0;
-    int i, h = n >> 1, sidx = (n == 16) ? 0 : 1;
+    int i, h = n >> 1, sidx = INGOT_SPLIT_IDX(n);
     int save_pm, try_pm;
 
 
@@ -527,10 +532,10 @@ static void write_plane_group(ingot_rc_enc *w, const uint8_t *orig, uint8_t *rec
                               int base, int p, uint16_t *probs, int64_t lambda)
 {
     int my, mx, pmode = INGOT_PRED_DC;   /* 조각·평면마다 DC 에서 시작한다 */
-    for (my = 0; my < gh; my += 16)
-        for (mx = 0; mx < gw; mx += 16)
+    for (my = 0; my < gh; my += INGOT_MAX_BLOCK)
+        for (mx = 0; mx < gw; mx += INGOT_MAX_BLOCK)
             code_quad(w, orig, recon, pw, ph, ox + mx, oy + my, ox, oy,
-                      16, base, p, probs, &pmode, lambda);
+                      INGOT_MAX_BLOCK, base, p, probs, &pmode, lambda);
 }
 
 ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
@@ -571,10 +576,18 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
 
     /* 왜곡과 비트를 견주는 무게. 양자화가 거칠수록 비트가 비싸진다.
      * 계수는 관행값(0.85 * step^2)의 정수 근사다. */
-    /* 비트 하나를 왜곡 얼마와 맞바꿀지 정하는 값. 100 분모다.
-     * 재서 정한다 — 너무 크면 인코더가 계수를 과하게 버린다. */
+    /* 비트 하나를 왜곡 얼마와 맞바꿀지 정하는 값. 100 분모라 3 은 0.03 이다.
+     *
+     * 10 이었는데 다섯 값을 다시 재서 3 으로 내렸다 (2026-08-23). 8/22 에
+     * λ 산식의 정밀도 결함을 고친 뒤 한 번도 다시 안 정한 값이었다.
+     *   6  -0.87 / -0.55 / -0.25      3  -2.91 / -2.22 / -0.36  <- 골랐다
+     *   5  -1.39 / -0.89 / -0.36      2  -4.78 / -3.17 / +2.08
+     *   4  -2.03 / -1.40 / -0.47      1  -5.91 / -3.52 / +7.48
+     * 낮출수록 인코더가 비트를 더 쓰는 쪽으로 기운다. 제곱 오차는 1 까지
+     * 계속 좋아지지만 **지각 지표가 4 에서 바닥을 치고 급격히 무너진다.**
+     * 세 지표가 함께 오르는 마지막 지점이 3 이다. */
 #ifndef INGOT_LAMBDA
-#define INGOT_LAMBDA 10
+#define INGOT_LAMBDA 3
 #endif
     lambda = ((int64_t)qbase * qbase * INGOT_LAMBDA * INGOT_RD_SCALE)
            / (100 * INGOT_BIT_UNIT);

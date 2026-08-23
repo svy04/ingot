@@ -89,10 +89,10 @@ ingot_status ingot_probe(const uint8_t *data, size_t size, int *width, int *heig
 static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
                          uint16_t *probs, int16_t *back, int tx)
 {
-    int16_t deq[256];
+    int16_t deq[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
     const uint16_t *zz = ingot_zigzag_of(n);
     int total = n * n, k;
-    int16_t placed[256];
+    int16_t placed[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
     uint32_t last;
 
     last = ingot_rc_get_uint(r, &probs[ingot_prob_of(ingot_ctx_last_n(plane, n))]);
@@ -178,7 +178,9 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                       int base, int p, uint16_t *probs, int *pmode,
                       uint8_t *map, int ms)
 {
-    int16_t pred[256], back[256], out[256];
+    int16_t pred[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
+            back[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
+            out[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
     ingot_neighbors nb;
     uint32_t mode;
     int total = n * n, k;
@@ -221,7 +223,7 @@ static int read_quad(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                      int base, int p, uint16_t *probs, int *pmode,
                      uint8_t *map, int ms)
 {
-    int i, h = n >> 1, sidx = (n == 16) ? 0 : 1;
+    int i, h = n >> 1, sidx = INGOT_SPLIT_IDX(n);
 
     if (n <= INGOT_MIN_BLOCK)
         return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p,
@@ -246,10 +248,11 @@ static int read_plane_group(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
 {
     int my, mx, pmode = INGOT_PRED_DC;   /* 조각·평면마다 DC 에서 시작한다 */
     memset(map, 0, (size_t)ms * ms);
-    for (my = 0; my < gh; my += 16)
-        for (mx = 0; mx < gw; mx += 16)
+    for (my = 0; my < gh; my += INGOT_MAX_BLOCK)
+        for (mx = 0; mx < gw; mx += INGOT_MAX_BLOCK)
             if (read_quad(r, plane, pw, ph, ox + mx, oy + my, ox, oy,
-                          16, base, p, probs, &pmode, map, ms)) return 1;
+                          INGOT_MAX_BLOCK, base, p, probs, &pmode, map, ms))
+                return 1;
     if (lf) ingot_loopfilter(plane, pw, ox, oy, gw, gh, map, ms, base, p ? 1 : 0);
     return 0;
 }

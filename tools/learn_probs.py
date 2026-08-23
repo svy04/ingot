@@ -202,6 +202,15 @@ def install(code, name="ingot_prob_init"):
     if c < 0:
         c = a
     s = s[:c] + code + s[b:]
+    # 표를 지키는 가드의 칸 수도 같이 고친다. 안 고치면 표는 새 배치인데
+    # 가드는 옛 수를 들고 있어서, 배치를 넓히는 손잡이가 컴파일에서 막힌다
+    # (2026-08-23 에 32x32 를 재려다 걸렸다).
+    m = re.search(r"static const uint16_t %s\[(\d+)\]" % re.escape(name), s)
+    if m:
+        cnt = m.group(1)
+        s = re.sub(r"#if INGOT_PROB_COUNT != \d+", 
+                   "#if INGOT_PROB_COUNT != " + cnt, s)
+        s = re.sub(r"학습 확률표 \d+ 칸이", "학습 확률표 " + cnt + " 칸이", s)
     io.open(p, "w", encoding="utf-8").write(s)
 
 
