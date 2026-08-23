@@ -79,6 +79,19 @@ void ingot_predict(const ingot_neighbors *nb, int mode, int16_t *pred)
         for (y = 0; y < n; y++)
             for (x = 0; x < n; x++)
                 pred[y * n + x] = (int16_t)nb->top[x];
+#if INGOT_EDGEFIX
+        /* 왼쪽 몇 열을 왼쪽 이웃 쪽으로 당긴다. 멀어질수록 덜 당긴다.
+         * 위-왼쪽 모서리를 기준으로 잰 차이를 쓴다. */
+        if (nb->has_top && nb->has_left && nb->has_topleft) {
+            int lim = n < 4 ? n : 4;
+            for (y = 0; y < n; y++) {
+                int d = nb->left[y] - nb->topleft;
+                for (x = 0; x < lim; x++)
+                    pred[y * n + x] = (int16_t)ingot_clamp_u8(
+                        pred[y * n + x] + (d >> (x + 1)));
+            }
+        }
+#endif
         return;
     }
 
@@ -86,6 +99,17 @@ void ingot_predict(const ingot_neighbors *nb, int mode, int16_t *pred)
         for (y = 0; y < n; y++)
             for (x = 0; x < n; x++)
                 pred[y * n + x] = (int16_t)nb->left[y];
+#if INGOT_EDGEFIX
+        if (nb->has_top && nb->has_left && nb->has_topleft) {
+            int lim = n < 4 ? n : 4;
+            for (x = 0; x < n; x++) {
+                int d = nb->top[x] - nb->topleft;
+                for (y = 0; y < lim; y++)
+                    pred[y * n + x] = (int16_t)ingot_clamp_u8(
+                        pred[y * n + x] + (d >> (y + 1)));
+            }
+        }
+#endif
         return;
     }
 
