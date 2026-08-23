@@ -191,8 +191,20 @@ static inline int ingot_tx_of_mode(int mode)
 #define INGOT_TAILTRIM 1
 #endif
 
-/* 봐주는 꼬리 길이. 마무리가 내던 바이트 수와 같다. */
-#define INGOT_TAIL_GRACE 5
+/* 블록마다 부호 하나를 안 적고 계수 절댓값 합의 홀짝으로 알릴지.
+ * 규격이 바뀐다. 부호는 파일의 15~21% 인데 이웃 부호로 문맥을 잡아도
+ * 평균 0.9993 비트라 모델로는 못 줄인다(2026-08-23 실측). 그래서 모델을
+ * 붙이는 대신 아예 안 적는 쪽으로 간다. 감추는 자리는 마지막 비영
+ * 계수이고, 홀짝이 안 맞으면 계수 하나를 +-1 옮겨 맞춘다. */
+#ifndef INGOT_SIGNHIDE
+#define INGOT_SIGNHIDE 0
+#endif
+
+/* 부호를 감출 최소 계수 개수(last). 짧은 블록은 +-1 옮길 자리가 적어
+ * 왜곡 대가가 아낀 한 비트보다 크다. */
+#ifndef INGOT_SH_MIN
+#define INGOT_SH_MIN 4
+#endif
 
 #ifndef INGOT_MODE_TRIALS
 #define INGOT_MODE_TRIALS 4
@@ -305,10 +317,33 @@ static inline int ingot_dequantize(int level, int step)
 #define INGOT_QW_ALPHA16 (INGOT_QW_ALPHA * 16)
 #endif
 
+/* 고주파 가중의 자리를 블록 크기로 맞출지. 규격이 바뀐다.
+ *
+ * 지금은 u+v 를 그대로 쓴다. 그런데 같은 u 라도 뜻하는 주파수가 크기마다
+ * 다르다 -- 8x8 의 u=4 와 16x16 의 u=8 이 같은 물리 주파수다. 그래서 지금
+ * 판은 작은 블록일수록 고주파를 덜 거칠게 다룬다. 자리의 최댓값이 4x4 는
+ * 6, 8x8 은 14, 16x16 은 30 이다.
+ *
+ * 그 차이는 나눔 판단에 곧장 들어간다. 인코더가 「16 을 넷으로 나눌까」를
+ * 견줄 때 두 후보의 양자화 세기가 서로 다르므로 그 비교가 공정하지 않다.
+ * 변환 눈금에서 똑같은 결함을 찾아 고친 적이 있다 (2026-08-23, 16x16 만
+ * 배수가 2.00 이던 건). 이쪽도 같은 자리다.
+ *
+ * 켜면 자리를 16 눈금으로 옮긴다: (u+v)*16/n. 16x16 은 지금과 똑같고
+ * 나머지 크기가 같은 자로 맞춰진다. */
+#ifndef INGOT_QW_NORM
+#define INGOT_QW_NORM 0
+#endif
+
 static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 {
     int u = idx % n, v = idx / n;
-    int s = (base * (256 + INGOT_QW_ALPHA16 * (u + v))) >> 8;
+#if INGOT_QW_NORM
+    int pos = ((u + v) * 16) / n;
+#else
+    int pos = u + v;
+#endif
+    int s = (base * (256 + INGOT_QW_ALPHA16 * pos)) >> 8;
     if (plane) s = (s * INGOT_QW_CHROMA) >> 4;
     return s < 1 ? 1 : s;
 }
@@ -499,9 +534,6 @@ typedef struct {
     size_t   size, pos;
     uint32_t range, code;
     int      error;
-#if INGOT_TAILTRIM
-    int      past;      /* 조각 끝을 넘겨 읽은 바이트 수 */
-#endif
 } ingot_rc_dec;
 
 /* 인코더가 자기 비트를 재는 자의 눈금.

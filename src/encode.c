@@ -96,14 +96,31 @@ static void store_recon(uint8_t *recon, int pw, int ph,
 
 /* 양자화까지 한 계수를 담고, 같은 값으로 복원 블록을 만든다.
  * w 가 NULL 이면 비트를 세기만 하고 아무것도 쓰지 않는다(시험 인코딩). */
+#if INGOT_SIGNHIDE
+/* 계수 하나를 적는 값의 어림자. 1/INGOT_BIT_UNIT 비트 눈금이다.
+ * 모델을 안 보는 어림이지만 후보끼리 견주는 데는 충분하다 -- 크기가
+ * 커지면 지수 골롬 접두부가 길어지고, 0 이면 깃발 하나로 끝난다. */
+static int64_t sh_bits(int v)
+{
+    int a = v < 0 ? -v : v, b = 0;
+    if (a == 0) return 0;
+    while (a >> (b + 1)) b++;
+    return (int64_t)(2 * b + 3) * INGOT_BIT_UNIT;
+}
+#endif
+
 static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n,
                           int plane, uint16_t *probs,
-                          const int16_t *pred, int16_t *recon, int tx)
+                          const int16_t *pred, int16_t *recon, int tx,
+                          int64_t lambda)
 {
     int16_t coef[256], z[256], deq[256], back[256];
     const uint16_t *zz = ingot_zigzag_of(n);
     int total = n * n, k, last = 0;
 
+#if !INGOT_SIGNHIDE
+    (void)lambda;      /* 부호 감추기를 꺼 두면 안 쓴다 */
+#endif
     ingot_fdct(resid, n, coef, n, tx);
 
     for (k = 0; k < total; k++) {
@@ -114,6 +131,47 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
         if (level != 0) last = k + 1;
     }
 
+#if INGOT_SIGNHIDE
+    /* 마지막 비영 계수의 부호를 감춘다. 절댓값 합의 홀짝이 그 부호와
+     * 안 맞으면 계수 하나를 +-1 옮겨 맞춘다. 옮길 자리는 양자화 전 값에서
+     * 덜 멀어지는 쪽으로 고른다. 반드시 last 를 적기 전에 끝낸다. */
+    int sh_on = (last >= INGOT_SH_MIN);
+    if (sh_on) {
+        int sum = 0, j;
+        for (j = 0; j < last; j++) sum += z[j] < 0 ? -z[j] : z[j];
+        if ((sum & 1) != (z[last - 1] < 0 ? 1 : 0)) {
+            int bestk = -1, bestd = 0;
+            int64_t bestcost = 0;
+            for (j = 0; j < last; j++) {
+                int jdx = zz[j];
+                int jstep = ingot_qstep_at(base, jdx, n, plane);
+                int64_t e0 = (int64_t)coef[jdx] - ingot_dequantize(z[j], jstep);
+                int d;
+                for (d = -1; d <= 1; d += 2) {
+                    int nv = z[j] + d;
+                    int64_t e1, cost;
+                    /* 마지막 비영 자리를 0 으로 만들면 last 의 뜻이 깨진다. */
+                    if (j == last - 1 && nv == 0) continue;
+                    if (nv > 32767 || nv < -32768) continue;
+                    e1 = (int64_t)coef[jdx]
+                       - ingot_dequantize((int16_t)nv, jstep);
+                    /* 왜곡만 보면 안 된다. 크기를 키우면 비트가 늘고
+                     * 줄이면 준다 -- 처음에 왜곡만 보고 골랐더니 파일이
+                     * 오히려 커졌다(품질 63 에서 +3.2%). 계수 하나의 값을
+                     * 대충 2*log2(|z|) + 2 로 보고, 0 에서 켜는 것은
+                     * 「0 인가」 깃발까지 뒤집으므로 더 세게 친다. */
+                    cost = e1 * e1 - e0 * e0
+                         + lambda * (sh_bits(nv) - sh_bits(z[j]));
+                    if (bestk < 0 || cost < bestcost) {
+                        bestk = j; bestd = d; bestcost = cost;
+                    }
+                }
+            }
+            /* last >= 4 이므로 마지막 자리 말고도 후보가 남는다. */
+            z[bestk] = (int16_t)(z[bestk] + bestd);
+        }
+    }
+#endif
 #ifdef INGOT_BIT_STATS
     ingot_bitplane = plane ? 1 : 0;
     ingot_bitcat = INGOT_BC_LAST;
@@ -137,6 +195,14 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
             /* k == last-1 이면 이 계수가 0 이 아닌 것을 디코더도 안다.
              * last 가 「마지막 비영 계수의 다음 자리」이기 때문이다.
              * 그 깃발을 안 적는다 (2026-08-23). */
+#if INGOT_SIGNHIDE
+            if (sh_on && k == last - 1)
+                /* 부호는 안 적는다. 디코더가 홀짝으로 안다. */
+                ingot_rc_put_uint_from(w,
+                    &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))],
+                    (uint32_t)(z[k] < 0 ? -z[k] : z[k]), 1);
+            else
+#endif
             ingot_rc_put_int_from(w,
                 &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))],
                 z[k], (k == last - 1) ? 1 : 0);
@@ -281,7 +347,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         memcpy(trial_p, probs, sizeof(trial_p));
         ingot_rc_enc_init(&trial, scratch, 0);     /* 용량 0 = 세기만 한다 */
         code_residual(&trial, resid, base, n, plane, trial_p, pred, out,
-                      ingot_tx_of_mode(m));
+                      ingot_tx_of_mode(m), lambda);
         bits = (int64_t)trial.bits;
         /* 모드를 적는 값도 후보마다 다르다. 앞 블록과 같은 모드는 확률 모델이
          * 이미 그쪽으로 기울어 있어 싸고, 드문 모드는 비싸다. 이것을 고른 뒤
@@ -314,7 +380,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         *pmode = best;
     }
     code_residual(w, resid, base, n, plane, probs, best_pred, out,
-                  ingot_tx_of_mode(best));
+                  ingot_tx_of_mode(best), lambda);
     store_recon(recon, pw, ph, bx, by, n, out);
     return best_cost;
 }

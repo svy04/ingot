@@ -78,7 +78,7 @@ def quality_of(ref, test):
 
 
 def measure_ours(images, tmp, sub=0):
-    rows = []
+    rows, broke = [], []
     for src in images:
         n = ppm_pixels(src)
         for q in QUALITIES:
@@ -90,10 +90,16 @@ def measure_ours(images, tmp, sub=0):
             # 특정 크기를 재려면 INGOT_GROUP 으로 지목한다.
             r, et = sh([BIN, "enc", src, enc, str(q),
                         os.environ.get("INGOT_GROUP", "0"), str(sub)])
+            # 우리 코덱이 실패하면 **큰 소리로** 넘어간다. 조용히 넘기다가,
+            # 조각 끝 꼬리 자르기 결함으로 품질 40 이상이 전부 안 열리는데도
+            # 순위표가 멀쩡해 보인 일이 있었다 (2026-08-23). 곡선에서 점이
+            # 빠지면 BD-rate 는 남은 점으로 그냥 계산된다.
             if r.returncode != 0:
+                broke.append('enc %s q%s' % (os.path.basename(src), q))
                 continue
             r2, dt = sh([BIN, "dec", enc, dec])
             if r2.returncode != 0:
+                broke.append('dec %s q%s' % (os.path.basename(src), q))
                 continue
             m = quality_of(src, dec)
             rows.append({
@@ -103,6 +109,11 @@ def measure_ours(images, tmp, sub=0):
                 "psnr": m["psnr"], "ssim": m["ssim"], "s2": m.get("s2"),
                 "enc_s": round(et, 3), "dec_s": round(dt, 3),
             })
+    if broke:
+        print('  !! 우리 코덱이 %d 점에서 실패했다 -- 곡선에 구멍이 났다:'
+              % len(broke))
+        for b in broke[:12]:
+            print('     ' + b)
     return rows
 
 

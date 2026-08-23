@@ -323,9 +323,6 @@ void ingot_rc_dec_init(ingot_rc_dec *d, const uint8_t *buf, size_t size)
     d->range = 0xFFFFFFFFu;
     d->code = 0;
     d->error = 0;
-#if INGOT_TAILTRIM
-    d->past = 0;
-#endif
 #if INGOT_NOLEAD
     /* 인코더가 첫 0 바이트를 안 냈으므로 네 바이트만 읽는다. */
     for (i = 0; i < 4; i++) {
@@ -341,9 +338,16 @@ static uint8_t rc_next_byte(ingot_rc_dec *d)
 {
     if (d->pos < d->size) return d->buf[d->pos++];
 #if INGOT_TAILTRIM
-    /* 인코더가 잘라 낸 0 꼬리만큼은 정상이다. 그 길이를 넘으면 손상이다.
-     * 진짜 잘린 파일은 해시가 잡는다. */
-    if (++d->past <= INGOT_TAIL_GRACE) return 0;
+    /* 조각 끝을 넘겨 읽는 것은 정상이다. 인코더가 끝의 0 을 안 냈고,
+     * 디코더는 그 자리를 0 으로 채워 읽으므로 답이 같다.
+     *
+     * 봐주는 길이를 다섯으로 묶었다가 실패했다. 잘리는 0 이 마무리가 낸
+     * 다섯 바이트만이 아니라 그 앞의 코딩 바이트까지 포함하기 때문이다.
+     * 품질 63 의 Baruch 에서는 129 바이트가 잘렸고, 다섯을 넘긴 순간
+     * 멀쩡한 파일이 손상으로 거절됐다. 정상 파일에서 디코더가 인코더가
+     * 낸 길이를 넘겨 읽는 일은 없으므로 여기서 세는 것은 값이 없다.
+     * 잘린 파일은 해시가 잡는다 (2026-08-23). */
+    return 0;
 #endif
     d->error = 1;      /* 입력 끝을 넘었다. 값은 0 으로 채운다 */
     return 0;

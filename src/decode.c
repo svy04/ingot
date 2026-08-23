@@ -100,6 +100,11 @@ static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
     if (last > (uint32_t)total) return 1;
 
     for (k = 0; k < total; k++) { deq[k] = 0; placed[k] = 0; }
+#if INGOT_SIGNHIDE
+    {
+    int sh_on = ((int)last >= INGOT_SH_MIN), sh_sum = 0;
+    int sh_idx = 0, sh_step = 0;
+#endif
 
     for (k = 0; k < (int)last; k++) {
         int idx = zz[k];
@@ -108,10 +113,21 @@ static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
         /* k == last-1 이면 이 계수가 0 이 아닌 것을 여기서도 안다.
          * last 가 「마지막 비영 계수의 다음 자리」이기 때문이다.
          * 인코더가 그 깃발을 안 적었으므로 여기서도 건너뛴다. */
-        int level = ingot_rc_get_int_from(
+        int level;
+        int v;
+#if INGOT_SIGNHIDE
+        if (sh_on && k == (int)last - 1) {
+            uint32_t mag = ingot_rc_get_uint_from(
+                r, &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))], 1);
+            if (r->error) return 1;
+            if (mag > 32767) return 1;
+            level = (int)mag;
+            sh_idx = idx; sh_step = step;
+        } else
+#endif
+        level = ingot_rc_get_int_from(
             r, &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))],
             (k == (int)last - 1) ? 1 : 0);
-        int v;
         if (r->error) return 1;
         if (level > 32767 || level < -32768) return 1;
         placed[idx] = (int16_t)level;
@@ -119,7 +135,22 @@ static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
         if (v >  32767) v =  32767;
         if (v < -32768) v = -32768;
         deq[idx] = (int16_t)v;
+#if INGOT_SIGNHIDE
+        sh_sum += level < 0 ? -level : level;
+#endif
     }
+#if INGOT_SIGNHIDE
+    /* 절댓값 합이 홀수면 감춘 부호가 음수다. */
+    if (sh_on && (sh_sum & 1)) {
+        int v2;
+        placed[sh_idx] = (int16_t)(-placed[sh_idx]);
+        v2 = ingot_dequantize(placed[sh_idx], sh_step);
+        if (v2 >  32767) v2 =  32767;
+        if (v2 < -32768) v2 = -32768;
+        deq[sh_idx] = (int16_t)v2;
+    }
+    }
+#endif
 
     ingot_idct(deq, back, n, n, tx);
     return 0;

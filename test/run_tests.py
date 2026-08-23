@@ -43,6 +43,34 @@ def make_synthetic(path, w, h, seed):
         f.write(b"".join(rows))
 
 
+def make_banded(path, w, h, seed):
+    """조각마다 「잡음 띠 + 평평한 면」이 오는 그림.
+
+    조각 끝의 0 꼬리를 자르는 규격에서, 잘리는 0 이 몇 바이트나 되는지는
+    조각의 끝이 얼마나 조용한가에 달렸다. 무늬가 고른 그림은 조각마다
+    두세 바이트밖에 안 잘려서, 봐주는 길이를 다섯으로 묶어 둔 결함이 안
+    걸렸다. 실사진(968x1188)에서는 조각 하나가 스물 몇 바이트까지 잘려
+    품질 40 이상이 전부 안 열렸는데도 시험은 통과했다 (2026-08-23).
+
+    그래서 그 조건을 일부러 만든다: 조각 높이(512)마다 위쪽 160 줄은
+    잡음이고 나머지는 단색이다. 잡음이 조각의 값을 채우고, 단색이 조각
+    끝의 0 꼬리를 길게 만든다."""
+    rnd = random.Random(seed)
+    rows = [b"P6\n%d %d\n255\n" % (w, h)]
+    flat = bytes((128, 128, 128)) * w
+    for y in range(h):
+        if (y % 512) < 160:
+            row = bytearray()
+            for _ in range(w):
+                row += bytes((rnd.randrange(256), rnd.randrange(256),
+                              rnd.randrange(256)))
+            rows.append(bytes(row))
+        else:
+            rows.append(flat)
+    with open(path, "wb") as f:
+        f.write(b"".join(rows))
+
+
 def digest(path):
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()[:16]
@@ -139,10 +167,17 @@ def test_roundtrip(tmp):
              (300, 200, 10, 9, 0),    # 조각 큼
              (300, 200, 10, 10, 0),   # 조각 최대
              (120, 90, 10, 6, 1)]     # 색차 절반
-    for (w, h, q, g, sub) in cases:
+    # 조각 끝이 조용한 큰 그림. 위 목록의 고른 무늬로는 0 꼬리가
+    # 두세 바이트라 안 걸린다. make_banded 의 주석에 근거를 적었다.
+    banded = [(1024, 1536, 40, 9, 0), (1024, 1536, 55, 9, 0),
+              (1024, 1536, 63, 9, 0)]
+    for (w, h, q, g, sub) in cases + banded:
         tag = "%dx%d q%d g%d sub%d" % (w, h, q, g, sub)
         src = os.path.join(tmp, "r.ppm")
-        make_synthetic(src, w, h, seed=w + h + q)
+        if (w, h, q, g, sub) in banded:
+            make_banded(src, w, h, seed=w + h + q)
+        else:
+            make_synthetic(src, w, h, seed=w + h + q)
         enc = os.path.join(tmp, "r.igt")
         dec = os.path.join(tmp, "r_out.ppm")
         if sh([BIN, "enc", src, enc, str(q), str(g), str(sub)]).returncode != 0:
@@ -173,7 +208,7 @@ def test_roundtrip(tmp):
             fails.append("왕복 화질 미달 %s: PSNR %.2f < %.1f" % (tag, p, floor))
             continue
         ok += 1
-    print("  왕복 %d/%d 통과 (화소까지 확인)" % (ok, len(cases)))
+    print("  왕복 %d/%d 통과 (화소까지 확인)" % (ok, len(cases) + len(banded)))
 
 
 def put32(b, off, v):
