@@ -159,6 +159,21 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #define INGOT_PRED_V      1
 #define INGOT_PRED_H      2
 #define INGOT_PRED_PLANE  3
+
+/* 네 번째 모드를 평면 대신 「매끄러운 보간」으로 바꿀지. 규격이 바뀌지만
+ * **비트 대가가 0 이다** -- 모드 수가 그대로라 기호도 그대로다.
+ *
+ * 지금 평면 모드는 위·왼쪽의 기울기를 반반으로 잘라 구한 거친 값으로
+ * 한 평면을 편다. 매끄러운 보간은 화소마다 위·왼쪽·오른쪽끝·아래끝을
+ * 거리로 섞는다. **-0.91 / -0.31 / -0.77%** (2026-08-23).
+ *
+ * 이 자리가 값진 이유는 대가가 0 이기 때문이다. 모드를 **늘리면** 기호가
+ * 비싸져서 예측이 더 맞아도 그 대가를 못 갚는다 -- 방향 예측을 여섯 번
+ * 재서 여섯 번 다 진 것이 그 때문이다. 모드를 안 늘리고 하나를 더 나은
+ * 것으로 바꾸면 그 함정이 없다. */
+#ifndef INGOT_SMOOTH
+#define INGOT_SMOOTH 1
+#endif
 #define INGOT_PRED_COUNT  4
 
 /* ---- 예측 모드 -> 변환 종류 ----

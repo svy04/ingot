@@ -89,6 +89,26 @@ void ingot_predict(const ingot_neighbors *nb, int mode, int16_t *pred)
         return;
     }
 
+#if INGOT_SMOOTH
+    /* 매끄러운 보간. 화소마다 위·왼쪽·오른쪽 끝·아래 끝을 거리로 섞는다.
+     * 위에서 멀어질수록 아래 끝 값을, 왼쪽에서 멀어질수록 오른쪽 끝 값을
+     * 더 크게 친다. 아래 왼쪽은 아직 안 담았으므로 왼쪽 열의 마지막 값을,
+     * 위 오른쪽도 없으므로 위 행의 마지막 값을 그 자리로 쓴다. */
+    {
+        int tr = nb->has_top ? nb->top[n - 1] : 128;     /* 위 행의 오른쪽 끝 */
+        int bl = nb->has_left ? nb->left[n - 1] : 128;   /* 왼쪽 열의 아래 끝 */
+        for (y = 0; y < n; y++) {
+            for (x = 0; x < n; x++) {
+                int wv = n - 1 - y, wh = n - 1 - x;
+                int v = wv * nb->top[x] + (y + 1) * bl
+                      + wh * nb->left[y] + (x + 1) * tr;
+                pred[y * n + x] = (int16_t)ingot_clamp_u8((v + n) / (2 * n));
+            }
+        }
+        return;
+    }
+#endif
+
     /* 평면 모드. 왼쪽과 위의 기울기를 이어 붙인다. */
     {
         int a = 0, b = 0, c, gx = 0, gy = 0;
