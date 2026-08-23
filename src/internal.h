@@ -374,35 +374,6 @@ typedef struct {
 
 /* recon 은 지금까지 복원된 평면이다. gx0·gy0 는 조각의 원점이라
  * 그보다 위·왼쪽은 이웃으로 쓰지 않는다. */
-/* 이 블록이 매끈한 자리인지 결이 많은 자리인지 이웃만 보고 잰다.
- * 위 행과 왼쪽 열의 평균 |2차 차분| 이다. 이미 복원된 화소만 보므로
- * 디코더가 같은 값을 구한다. 돌려주는 것은 양자화 세기 배수(16 분모)로,
- * 매끈하면 16 보다 크고(거칠게) 결이 많으면 작다(곱게). */
-static inline int ingot_aq_mul(const ingot_neighbors *nb)
-{
-#if INGOT_AQ
-    int i, n = nb->n, s = 0, cnt = 0;
-    if (nb->has_top)
-        for (i = 1; i < n - 1; i++) {
-            int d = 2 * nb->top[i] - nb->top[i - 1] - nb->top[i + 1];
-            s += d < 0 ? -d : d; cnt++;
-        }
-    if (nb->has_left)
-        for (i = 1; i < n - 1; i++) {
-            int d = 2 * nb->left[i] - nb->left[i - 1] - nb->left[i + 1];
-            s += d < 0 ? -d : d; cnt++;
-        }
-    if (cnt == 0) return 16;
-    s /= cnt;
-    if (s <= INGOT_AQ_LO) return 16 + INGOT_AQ_STR;
-    if (s >= INGOT_AQ_HI) return 16 - INGOT_AQ_STR;
-    return 16;
-#else
-    (void)nb;
-    return 16;
-#endif
-}
-
 void ingot_gather_neighbors(const uint8_t *recon, int pw, int ph,
                             int bx, int by, int gx0, int gy0, int n,
                             ingot_neighbors *nb);
@@ -527,7 +498,14 @@ static inline int ingot_dequantize(int level, int step)
  * 이웃과의 차이(라플라시안)이고, 조절 대상은 λ 가 아니라 양자화 스텝
  * 자체이며, 방향은 **매끈한 자리를 거칠게, 결이 많은 자리를 곱게** 다.
  * 우리가 여섯 번 재서 여섯 번 진 것은 분산으로 λ 를 조절하는 것이었다 --
- * 재는 값도 조절 대상도 다르다. */
+ * 재는 값도 조절 대상도 다르다.
+ *
+ * **재서 뺐다: -0.66 / +1.04 / +2.48** (2026-08-23). PSNR 만 이기고 지각이
+ * 무너진다. libjxl 과 갈리는 자리는 **세기를 어디서 얻느냐**다 -- 그쪽은
+ * 자리마다 세기를 신호해서 인코더가 **원본**을 보고 정하지만, 우리는
+ * 비트를 안 쓰려고 **이웃**에서 추정한다. 매끈한 이웃 뒤에 결이 오면
+ * 거꾸로 친다. 쓰려면 세기를 신호해야 하고, 그러면 그 비트값이 이득을
+ * 넘는지 다시 재야 한다(미측정). */
 #ifndef INGOT_AQ
 #define INGOT_AQ 0
 #endif
@@ -559,6 +537,35 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 }
 
 /* 위 함수에 블록마다의 세기 배수를 얹은 것. 배수는 16 분모다. */
+/* 이 블록이 매끈한 자리인지 결이 많은 자리인지 이웃만 보고 잰다.
+ * 위 행과 왼쪽 열의 평균 |2차 차분| 이다. 이미 복원된 화소만 보므로
+ * 디코더가 같은 값을 구한다. 돌려주는 것은 양자화 세기 배수(16 분모)로,
+ * 매끈하면 16 보다 크고(거칠게) 결이 많으면 작다(곱게). */
+static inline int ingot_aq_mul(const ingot_neighbors *nb)
+{
+#if INGOT_AQ
+    int i, n = nb->n, s = 0, cnt = 0;
+    if (nb->has_top)
+        for (i = 1; i < n - 1; i++) {
+            int d = 2 * nb->top[i] - nb->top[i - 1] - nb->top[i + 1];
+            s += d < 0 ? -d : d; cnt++;
+        }
+    if (nb->has_left)
+        for (i = 1; i < n - 1; i++) {
+            int d = 2 * nb->left[i] - nb->left[i - 1] - nb->left[i + 1];
+            s += d < 0 ? -d : d; cnt++;
+        }
+    if (cnt == 0) return 16;
+    s /= cnt;
+    if (s <= INGOT_AQ_LO) return 16 + INGOT_AQ_STR;
+    if (s >= INGOT_AQ_HI) return 16 - INGOT_AQ_STR;
+    return 16;
+#else
+    (void)nb;
+    return 16;
+#endif
+}
+
 static inline int ingot_qstep_aq(int base, int idx, int n, int plane, int aqm)
 {
     int s = ingot_qstep_at(base, idx, n, plane);
