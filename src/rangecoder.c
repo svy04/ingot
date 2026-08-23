@@ -222,6 +222,7 @@ static void rc_shift_low(ingot_rc_enc *e)
     e->low = (uint64_t)(((uint32_t)e->low) << 8);
 }
 
+
 #ifdef INGOT_BIT_STATS
 #include <stdio.h>
 double ingot_bitstat[2][INGOT_BC_COUNT];
@@ -295,7 +296,19 @@ void ingot_rc_enc_bypass(ingot_rc_enc *e, uint32_t value, int nbits)
 size_t ingot_rc_enc_finish(ingot_rc_enc *e)
 {
     int i;
+#if INGOT_TAILTRIM
+    /* 마무리 값을 2^24 배수로 올린다. 올린 양이 2^24 미만이고 정규화 뒤
+     * range 는 항상 2^24 이상이므로, 올린 값은 여전히 [low, low+range) 안이다.
+     * 즉 디코더가 읽는 답이 안 바뀐다. 대신 아래 세 바이트가 0 이 된다. */
+    uint64_t r = e->low & 0xFFFFFFu;
+    if (r) e->low += (uint64_t)0x1000000u - r;
+#endif
     for (i = 0; i < 5; i++) rc_shift_low(e);
+#if INGOT_TAILTRIM
+    /* 끝에 남은 0 은 안 낸다. 디코더가 조각 끝을 넘기면 0 을 채워 읽으므로
+     * 같은 값이 나온다. 조각마다 서너 바이트다. */
+    while (e->pos > 0 && e->buf[e->pos - 1] == 0) e->pos--;
+#endif
     return e->overflow ? 0 : e->pos;
 }
 
@@ -310,6 +323,9 @@ void ingot_rc_dec_init(ingot_rc_dec *d, const uint8_t *buf, size_t size)
     d->range = 0xFFFFFFFFu;
     d->code = 0;
     d->error = 0;
+#if INGOT_TAILTRIM
+    d->past = 0;
+#endif
 #if INGOT_NOLEAD
     /* 인코더가 첫 0 바이트를 안 냈으므로 네 바이트만 읽는다. */
     for (i = 0; i < 4; i++) {
@@ -324,6 +340,11 @@ void ingot_rc_dec_init(ingot_rc_dec *d, const uint8_t *buf, size_t size)
 static uint8_t rc_next_byte(ingot_rc_dec *d)
 {
     if (d->pos < d->size) return d->buf[d->pos++];
+#if INGOT_TAILTRIM
+    /* 인코더가 잘라 낸 0 꼬리만큼은 정상이다. 그 길이를 넘으면 손상이다.
+     * 진짜 잘린 파일은 해시가 잡는다. */
+    if (++d->past <= INGOT_TAIL_GRACE) return 0;
+#endif
     d->error = 1;      /* 입력 끝을 넘었다. 값은 0 으로 채운다 */
     return 0;
 }

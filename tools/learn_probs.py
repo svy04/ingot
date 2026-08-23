@@ -100,7 +100,7 @@ def wait_runnable():
 def run_enc(path, q, env):
     for attempt in range(6):
         try:
-            subprocess.run([BIN, "enc", path, "_learn.igt", str(q), "8", "0"],
+            subprocess.run([BIN, "enc", path, "_learn.igt", str(q), "0", "0"],
                            cwd=ROOT, env=env, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
             return

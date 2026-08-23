@@ -180,6 +180,20 @@ static inline int ingot_tx_of_mode(int mode)
 #define INGOT_NOLEAD 1
 #endif
 
+/* 조각 끝에서 나가던 마무리 다섯 바이트 중 필요 없는 꼬리를 자를지.
+ * 규격이 바뀐다. 마무리 직전에 low 를 2^24 배수로 올림하면 아래 세 바이트가
+ * 0 이 되는데, 올린 양이 range 보다 작으므로(정규화 뒤 range >= 2^24)
+ * 그 값은 여전히 인코더가 뜻한 구간 안이다. 그렇게 나온 0 꼬리를 안 낸다.
+ * 디코더는 조각 끝을 넘겨 읽을 때 이미 0 으로 채우고 있었으므로 같은 값을
+ * 읽는다 -- 다만 그것을 손상으로 치던 표시를 꼬리 길이만큼 봐준다.
+ * -0.13 / -0.34 / -0.65% (2026-08-23). */
+#ifndef INGOT_TAILTRIM
+#define INGOT_TAILTRIM 1
+#endif
+
+/* 봐주는 꼬리 길이. 마무리가 내던 바이트 수와 같다. */
+#define INGOT_TAIL_GRACE 5
+
 #ifndef INGOT_MODE_TRIALS
 #define INGOT_MODE_TRIALS 4
 #endif
@@ -465,6 +479,7 @@ extern long ingot_certain[2];
 void ingot_bitstat_dump(const char *path);
 #endif
 
+
 typedef struct {
     uint8_t *buf;
     size_t   cap, pos;
@@ -484,6 +499,9 @@ typedef struct {
     size_t   size, pos;
     uint32_t range, code;
     int      error;
+#if INGOT_TAILTRIM
+    int      past;      /* 조각 끝을 넘겨 읽은 바이트 수 */
+#endif
 } ingot_rc_dec;
 
 /* 인코더가 자기 비트를 재는 자의 눈금.

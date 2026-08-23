@@ -76,7 +76,7 @@ def main():
     for p in src:
         enc = os.path.join(tmp, "o.igt")
         dec = os.path.join(tmp, "o.ppm")
-        te = timed([BIN, "enc", p, enc, "20", "8", "0"])
+        te = timed([BIN, "enc", p, enc, "20", "0", "0"])
         td = timed([BIN, "dec", enc, dec])
         if te is not None:
             acc.setdefault("ingot", []).append((te, td, os.path.getsize(enc)))

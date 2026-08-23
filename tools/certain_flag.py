@@ -64,7 +64,7 @@ def main():
             os.remove(path)
         env = dict(os.environ, INGOT_BITSTAT_PATH=path)
         for f in imgs:
-            subprocess.run([exe, "enc", f, os.path.join(tmp, "o.igt"), str(q), "8"],
+            subprocess.run([exe, "enc", f, os.path.join(tmp, "o.igt"), str(q), "0"],
                            env=env, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
         if not os.path.exists(path):

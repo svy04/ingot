@@ -84,10 +84,12 @@ def measure_ours(images, tmp, sub=0):
         for q in QUALITIES:
             enc = os.path.join(tmp, "b.igt")
             dec = os.path.join(tmp, "b.ppm")
-            # 조각 크기는 환경 변수로 바꿀 수 있다. 기본값을 재려면 여기를
-            # 바꿔야 한다 — 인코더의 기본 손잡이는 이 인자에 덮인다.
+            # 조각 크기는 0 을 넘겨 **인코더의 기본값**을 쓴다. 예전에는 여기에
+            # "8" 이 박혀 있어서 소스의 기본값을 바꿔도 벤치가 못 봤다 —
+            # -DINGOT_GROUP_DEFAULT=10 이 +0.00 으로 찍혔다(2026-08-23).
+            # 특정 크기를 재려면 INGOT_GROUP 으로 지목한다.
             r, et = sh([BIN, "enc", src, enc, str(q),
-                        os.environ.get("INGOT_GROUP", "8"), str(sub)])
+                        os.environ.get("INGOT_GROUP", "0"), str(sub)])
             if r.returncode != 0:
                 continue
             r2, dt = sh([BIN, "dec", enc, dec])
