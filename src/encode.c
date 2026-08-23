@@ -464,7 +464,12 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     /* 통째로 담는 값이 이미 아주 작으면 나눠 봐야 이길 수 없다. 나누면
      * 나눔 비트와 블록 머리말이 넷으로 늘기 때문이다. 평탄한 자리가 많은
      * 이미지에서 이 한 줄이 시험 인코딩을 크게 줄인다. */
+#if INGOT_SPLIT_SKIP_AREA
+    if (cost_whole < lambda * INGOT_SPLIT_SKIP * INGOT_BIT_UNIT
+                     * (n * n) / 256) {
+#else
     if (cost_whole < lambda * INGOT_SPLIT_SKIP * INGOT_BIT_UNIT) {
+#endif
         memcpy(probs, save, sizeof(save));
         *pmode = save_pm;
         BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0); BS_SPLIT_OFF();

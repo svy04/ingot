@@ -64,6 +64,30 @@
 #define INGOT_BLK32 1
 #endif
 
+/* 한 단계 더 넓혀 64x64 까지 쓸지. 규격이 바뀐다.
+ * 32x32 가 이긴 뒤 크기별 선택 빈도를 세니 32x32 가 통짜로 남는 비율이
+ * 품질 10 에서 52%, 40 에서 80% 였다. 큰 쪽일수록 안 나누는 경향이라
+ * 한 단계 더 걸어 봤다. 켜면 문맥 칸이 719 에서 736 으로 늘어 표를 다시
+ * 배워야 한다.
+ *
+ * **재서 이겼는데도 안 켠다.** -0.48 / -0.45 / -0.83% 인데 인코딩이
+ * 7.43 -> 15.95 초(2.15배), 디코딩이 0.322 -> 0.544 초(1.69배)다.
+ * 16->32 는 -2.86 / -3.90 / -3.07 을 인코딩 1.7배로 샀으니 값이 있었지만,
+ * 32->64 는 -0.5% 대를 2.15배로 사는 셈이다. 디코딩이 1.7배 느려지는 것은
+ * 쓰는 사람에게 그대로 간다. 인코더를 빠르게 만든 뒤 다시 건다
+ * (2026-08-23). */
+#ifndef INGOT_BLK64
+#define INGOT_BLK64 0
+#endif
+
+/* 64 점 변환의 눈금. 상수 블록의 DC 가 직교 기준의 4.00 배가 되게 맞췄다.
+ * FWD_PRE64 는 순변환 1단 뒤에 미리 내리는 비트다 -- 안 내리면 2단 누산이
+ * int32 한계의 394% 라 넘친다. 3 이면 49.2% 로 떨어지고, 왕복 오차는 안
+ * 내린 판과 같다(무작위 잔차 20 블록, 최대 6·제곱평균제곱근 1.43). */
+#define INGOT_FWD_SHIFT64 16
+#define INGOT_INV_SHIFT64 20
+#define INGOT_FWD_PRE64   3
+
 /* 32 점 변환의 눈금. 손잡이를 꺼도 정의해 둔다 -- 변환의 삼항식이 이름을
  * 언제나 참조하기 때문이다. n 이 32 일 때만 쓰인다.
  * 상수 블록의 DC 가 직교 기준의 4.00 배가 되게 맞췄다(16x16 과 같은 값이라
@@ -73,7 +97,9 @@
 #define INGOT_FWD_SHIFT32 15
 #define INGOT_INV_SHIFT32 19
 
-#if INGOT_BLK32
+#if INGOT_BLK64
+#define INGOT_MAX_BLOCK   64
+#elif INGOT_BLK32
 #define INGOT_MAX_BLOCK   32
 #else
 #define INGOT_MAX_BLOCK   16
@@ -238,6 +264,17 @@ static inline int ingot_tx_of_mode(int mode)
 #define INGOT_SPLIT_SKIP 24
 #endif
 
+/* 그 문턱을 블록 넓이에 맞출지. 인코더만의 판단이라 규격이 아니다.
+ *
+ * cost_whole 에는 화소 n*n 개의 왜곡이 들어 있는데 문턱은 상수다. 그래서
+ * 같은 값이 8x8 에는 헐겁고 16x16 에는 빡빡해서, 크기마다 다른 비율로
+ * 나눔 후보를 안 재고 버린다. 켜면 16x16 을 기준으로 넓이에 비례시킨다:
+ * SPLIT_SKIP * n * n / 256. 「크기가 바뀌면 뜻이 바뀌는 값」의 네 번째
+ * 자리다 -- 앞의 셋(변환 눈금, 경계 가중, 고주파 가중)은 전부 이겼다. */
+#ifndef INGOT_SPLIT_SKIP_AREA
+#define INGOT_SPLIT_SKIP_AREA 0
+#endif
+
 typedef struct {
     int n;                      /* 블록 한 변. 4 부터 INGOT_MAX_BLOCK 까지 */
     int top[INGOT_MAX_BLOCK], left[INGOT_MAX_BLOCK], topleft;
@@ -386,7 +423,9 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 #define INGOT_NBLEV 5
 #endif
 
-#if INGOT_BLK32
+#if INGOT_BLK64
+#define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 5 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
+#elif INGOT_BLK32
 /* 32 를 켜면 크기 무리가 하나 는다. BYSIZE==1 은 「16 인가」였으니
  * 「16 이상인가」로 넓히고, BYSIZE==2 는 32 를 제 무리로 둔다. */
 #define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 4 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
@@ -394,7 +433,9 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 #define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 3 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
 #endif
 #define INGOT_CTX_BASE  (INGOT_CTX_SIZES * 4 * INGOT_NBLEV * 2)
-#if INGOT_BLK32
+#if INGOT_BLK64
+#define INGOT_CTX_LASTN 5
+#elif INGOT_BLK32
 #define INGOT_CTX_LASTN 4
 #else
 #define INGOT_CTX_LASTN 3
@@ -455,7 +496,7 @@ static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
     /* 같은 대역이라도 4x4 의 셋째 계수와 16x16 의 마흔째 계수는 분포가
      * 다르다. last 를 크기별로 가른 것이 크게 먹혔으므로 여기도 가른다. */
 #if INGOT_CTX_BYSIZE == 2
-    int sz = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2 : 3;
+    int sz = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2 : (n == 32) ? 3 : 4;
     return ((sz * 4 + band) * INGOT_NBLEV + lvl) + (plane ? (INGOT_CTX_BASE / 2) : 0);
 #else
     int sz = (n >= 16) ? 1 : 0;
@@ -471,7 +512,7 @@ static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
  * 16x16 은 수십까지 간다. 그래서 크기별로 무리를 갈라 둔다. */
 static inline int ingot_ctx_last_n(int plane, int n)
 {
-    int sz = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2 : 3;
+    int sz = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2 : (n == 32) ? 3 : 4;
     return INGOT_CTX_BASE + sz * 2 + (plane ? 1 : 0);
 }
 
@@ -487,14 +528,18 @@ static inline int ingot_ctx_last_n(int plane, int n)
  * 무리 뒤에 분할 2개(16→8, 8→4)와 모드 12개(앞 블록 모드 4 × 트리 3)를 더한다. */
 #define INGOT_PROB_PER_CTX 8
 #define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
-#if INGOT_BLK32
+#if INGOT_BLK64
+#define INGOT_SPLIT_LEVELS 4              /* 64->32, 32->16, 16->8, 8->4 */
+#elif INGOT_BLK32
 #define INGOT_SPLIT_LEVELS 3                        /* 32->16, 16->8, 8->4 */
 #else
 #define INGOT_SPLIT_LEVELS 2                        /* 16->8 과 8->4 */
 #endif
 #define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + INGOT_SPLIT_LEVELS)
 /* 나눔 비트의 모델 자리. 큰 크기부터 0 번이다. */
-#if INGOT_BLK32
+#if INGOT_BLK64
+#define INGOT_SPLIT_IDX(n) ((n) == 64 ? 0 : (n) == 32 ? 1 : (n) == 16 ? 2 : 3)
+#elif INGOT_BLK32
 #define INGOT_SPLIT_IDX(n) ((n) == 32 ? 0 : (n) == 16 ? 1 : 2)
 #else
 #define INGOT_SPLIT_IDX(n) ((n) == 16 ? 0 : 1)
