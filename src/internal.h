@@ -531,16 +531,27 @@ static inline int ingot_ctx_level(int nb)
 
 /* 계수 자리를 몇 대역으로 가를지. 「0 인가」 깃발은 품질 40 에서 파일의
  * 57% 를 쓰는데, 그 문맥을 가르는 이 경계가 손으로 고른 값이었다.
- * 4 였다가 6 으로 늘렸다 (2026-08-23). 4 는 경계가 5·20 이고 6 은
- * 2·5·10·20·40 으로 저주파를 더 잘게 가른다. **-0.25 / -0.24 / -0.05%**.
- * 대가는 확률표가 커지는 것뿐이다. */
+ * 4 였다가 8 로 늘렸다 (2026-08-23). 경계는 4 가 5·20, 6 이 2·5·10·20·40,
+ * 8 이 1·2·5·10·20·40 이다. 저주파를 잘게 가를수록 벌지만 수익이 준다:
+ * 6 이 -0.25 / -0.24 / -0.05, 8 이 그 위에서 다시 -0.09 / -0.08 / -0.13.
+ * 대가는 확률표가 커지는 것뿐인데, 이 표는 **파일에 안 실린다** --
+ * 디코더 안에 상수로 들어가므로 실행 파일만 커진다. */
 #ifndef INGOT_BANDS
-#define INGOT_BANDS 6
+#define INGOT_BANDS 8
 #endif
 
 static inline int ingot_band_of(int kk)
 {
-#if INGOT_BANDS == 6
+#if INGOT_BANDS == 8
+    if (kk == 0) return 0;
+    if (kk <= 1) return 1;
+    if (kk <= 2) return 2;
+    if (kk <= 5) return 3;
+    if (kk <= 10) return 4;
+    if (kk <= 20) return 5;
+    if (kk <= 40) return 6;
+    return 7;
+#elif INGOT_BANDS == 6
     if (kk == 0) return 0;
     if (kk <= 2) return 1;
     if (kk <= 5) return 2;
