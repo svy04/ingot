@@ -473,7 +473,7 @@ static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 #else
 #define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 3 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
 #endif
-#define INGOT_CTX_BASE  (INGOT_CTX_SIZES * 4 * INGOT_NBLEV * 2)
+#define INGOT_CTX_BASE  (INGOT_CTX_SIZES * INGOT_BANDS * INGOT_NBLEV * 2)
 #if INGOT_BLK64
 #define INGOT_CTX_LASTN 5
 #elif INGOT_BLK32
@@ -529,19 +529,50 @@ static inline int ingot_ctx_level(int nb)
 #endif
 }
 
+/* 계수 자리를 몇 대역으로 가를지. 「0 인가」 깃발은 품질 40 에서 파일의
+ * 57% 를 쓰는데, 그 문맥을 가르는 이 경계가 손으로 고른 값이었다.
+ * 4 였다가 6 으로 늘렸다 (2026-08-23). 4 는 경계가 5·20 이고 6 은
+ * 2·5·10·20·40 으로 저주파를 더 잘게 가른다. **-0.25 / -0.24 / -0.05%**.
+ * 대가는 확률표가 커지는 것뿐이다. */
+#ifndef INGOT_BANDS
+#define INGOT_BANDS 6
+#endif
+
+static inline int ingot_band_of(int kk)
+{
+#if INGOT_BANDS == 6
+    if (kk == 0) return 0;
+    if (kk <= 2) return 1;
+    if (kk <= 5) return 2;
+    if (kk <= 10) return 3;
+    if (kk <= 20) return 4;
+    return 5;
+#elif INGOT_BANDS == 5
+    if (kk == 0) return 0;
+    if (kk <= 2) return 1;
+    if (kk <= 5) return 2;
+    if (kk <= 20) return 3;
+    return 4;
+#else
+    return (kk == 0) ? 0 : (kk <= 5) ? 1 : (kk <= 20) ? 2 : 3;
+#endif
+}
+
 static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
 {
     int kk = (n == 8) ? k : (k * 64) / (n * n);
-    int band = (kk == 0) ? 0 : (kk <= 5) ? 1 : (kk <= 20) ? 2 : 3;
+    int band = ingot_band_of(kk);
 #if INGOT_CTX_BYSIZE
     /* 같은 대역이라도 4x4 의 셋째 계수와 16x16 의 마흔째 계수는 분포가
      * 다르다. last 를 크기별로 가른 것이 크게 먹혔으므로 여기도 가른다. */
 #if INGOT_CTX_BYSIZE == 2
     int sz = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2 : (n == 32) ? 3 : 4;
-    return ((sz * 4 + band) * INGOT_NBLEV + lvl) + (plane ? (INGOT_CTX_BASE / 2) : 0);
+    return ((sz * INGOT_BANDS + band) * INGOT_NBLEV + lvl)
+         + (plane ? (INGOT_CTX_BASE / 2) : 0);
 #else
     int sz = (n >= 16) ? 1 : 0;
-    return ((sz * 4 + band) * INGOT_NBLEV + lvl) + (plane ? (INGOT_CTX_BASE / 2) : 0);
+    return ((sz * INGOT_BANDS + band) * INGOT_NBLEV + lvl)
+         + (plane ? (INGOT_CTX_BASE / 2) : 0);
 #endif
 #else
     return (band * INGOT_NBLEV + lvl) + (plane ? (INGOT_CTX_BASE / 2) : 0);
