@@ -77,7 +77,7 @@
  * 쓰는 사람에게 그대로 간다. 인코더를 빠르게 만든 뒤 다시 건다
  * (2026-08-23). */
 #ifndef INGOT_BLK64
-#define INGOT_BLK64 0
+#define INGOT_BLK64 1
 #endif
 
 /* 64 점 변환의 눈금. 상수 블록의 DC 가 직교 기준의 4.00 배가 되게 맞췄다.
@@ -615,7 +615,7 @@ static inline int ingot_qstep_aq(int base, int idx, int n, int plane, int aqm)
 #else
 #define INGOT_CTX_LASTN 3
 #endif
-#define INGOT_CTX_COUNT (INGOT_CTX_BASE + INGOT_CTX_LASTN * 2)
+#define INGOT_CTX_COUNT (INGOT_CTX_BASE + INGOT_CTX_LASTN * 2 * INGOT_EMPTY_LEVELS)
 /* 지그재그 자리와 평면으로 무리를 고른다.
  * 블록 크기가 달라도 같은 무리를 쓰도록 자리를 64칸 눈금으로 옮긴다. */
 static inline int ingot_abs_i(int v) { return v < 0 ? -v : v; }
@@ -727,10 +727,38 @@ static inline int ingot_ctx_index(int k, int n, int plane, int lvl)
 /* 블록 머리말(last) 전용 무리. */
 /* last 는 블록 크기마다 분포가 아주 다르다. 4x4 는 대개 한둘이고
  * 16x16 은 수십까지 간다. 그래서 크기별로 무리를 갈라 둔다. */
+/* 머리말의 첫 깃발(= 이 블록이 비었는가)에 앞 블록이 비었는지를 붙일지.
+ * 규격이 바뀌지만 비트 대가는 0 이다 -- 디코더도 앞 블록을 이미 읽었다.
+ *
+ * 왜 이 자리인가: 그림마다 AVIF 와의 격차가 다섯 배 차이나는데, 잘 지는
+ * 그림은 빈 블록이 36% 이고 잘 이기는 그림은 12% 다(2026-08-23 실측).
+ * 매끈한 그림에서 빈 블록마다 내는 깃발이 머리말을 파일의 16% 까지
+ * 올린다. 빈 블록은 자리마다 이어지므로 앞을 보면 싸진다. */
+#ifndef INGOT_EMPTY_CTX
+#define INGOT_EMPTY_CTX 0
+#endif
+
+#if INGOT_EMPTY_CTX
+#define INGOT_EMPTY_LEVELS 2
+#else
+#define INGOT_EMPTY_LEVELS 1
+#endif
+
 static inline int ingot_ctx_last_n(int plane, int n)
 {
     int sz = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2 : (n == 32) ? 3 : 4;
-    return INGOT_CTX_BASE + sz * 2 + (plane ? 1 : 0);
+    return INGOT_CTX_BASE + (sz * 2 + (plane ? 1 : 0)) * INGOT_EMPTY_LEVELS;
+}
+
+/* 앞 블록이 비었으면 다른 무리를 쓴다. */
+static inline int ingot_ctx_last_e(int plane, int n, int prev_empty)
+{
+#if INGOT_EMPTY_CTX
+    return ingot_ctx_last_n(plane, n) + (prev_empty ? 1 : 0);
+#else
+    (void)prev_empty;
+    return ingot_ctx_last_n(plane, n);
+#endif
 }
 
 /* ---- 레인지 코더 (rangecoder.c) ----

@@ -112,7 +112,7 @@ static int64_t sh_bits(int v)
 static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n,
                           int plane, uint16_t *probs,
                           const int16_t *pred, int16_t *recon, int tx,
-                          int64_t lambda, int aqm)
+                          int64_t lambda, int aqm, int *pempty)
 {
     int16_t coef[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK], z[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
             deq[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK], back[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
@@ -177,7 +177,9 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
     ingot_bitplane = plane ? 1 : 0;
     ingot_bitcat = INGOT_BC_LAST;
 #endif
-    ingot_rc_put_uint(w, &probs[ingot_prob_of(ingot_ctx_last_n(plane, n))], (uint32_t)last);
+    ingot_rc_put_uint(w, &probs[ingot_prob_of(ingot_ctx_last_e(plane, n, *pempty))],
+                      (uint32_t)last);
+    *pempty = (last == 0);
 #ifdef INGOT_BIT_STATS
     ingot_bitcat = INGOT_BC_ZERO;
 #endif
@@ -302,7 +304,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                           int pw, int ph, int bx, int by, int gx0, int gy0,
                           int n, int base, int plane, uint16_t *probs,
                           int *pmode, int64_t lambda, int *mode_io,
-                          const uint8_t *luma, int lstride)
+                          const uint8_t *luma, int lstride, int *pempty)
 {
     int16_t src[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
             pred[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
@@ -313,7 +315,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     uint16_t trial_p[INGOT_PROB_COUNT];
     ingot_rc_enc trial;
     uint8_t scratch[1];
-    int total = n * n, m, k, best = INGOT_PRED_DC, aqm;
+    int total = n * n, m, k, best = INGOT_PRED_DC, aqm, try_empty;
     int64_t best_cost = -1;
     int64_t rough[INGOT_PRED_COUNT];
     int order[INGOT_PRED_COUNT], t, ti, tries;
@@ -327,6 +329,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     (void)luma; (void)lstride;
 #endif
     aqm = ingot_aq_mul(&nb);
+    try_empty = *pempty;
 
 
 #if INGOT_PLAN
@@ -347,7 +350,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 #endif
         *pmode = best;
         code_residual(w, resid, base, n, plane, probs, best_pred, out,
-                      ingot_tx_of_mode(best), lambda, aqm);
+                      ingot_tx_of_mode(best), lambda, aqm, pempty);
         store_recon(recon, pw, ph, bx, by, n, out);
         return 0;      /* 재생 중에는 값을 안 쓴다 */
     }
@@ -387,7 +390,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         memcpy(trial_p, probs, sizeof(trial_p));
         ingot_rc_enc_init(&trial, scratch, 0);     /* 용량 0 = 세기만 한다 */
         code_residual(&trial, resid, base, n, plane, trial_p, pred, out,
-                      ingot_tx_of_mode(m), lambda, aqm);
+                      ingot_tx_of_mode(m), lambda, aqm, &try_empty);
         bits = (int64_t)trial.bits;
         /* 모드를 적는 값도 후보마다 다르다. 앞 블록과 같은 모드는 확률 모델이
          * 이미 그쪽으로 기울어 있어 싸고, 드문 모드는 비싸다. 이것을 고른 뒤
@@ -420,7 +423,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         *pmode = best;
     }
     code_residual(w, resid, base, n, plane, probs, best_pred, out,
-                  ingot_tx_of_mode(best), lambda, aqm);
+                  ingot_tx_of_mode(best), lambda, aqm, pempty);
     store_recon(recon, pw, ph, bx, by, n, out);
 #if INGOT_PLAN
     if (mode_io) *mode_io = best;
@@ -472,7 +475,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                          int pw, int ph, int bx, int by, int gx0, int gy0,
                          int n, int base, int plane, uint16_t *probs,
                          int *pmode, int64_t lambda, ingot_plan *pl,
-                         const uint8_t *luma, int lstride)
+                         const uint8_t *luma, int lstride, int *pempty)
 {
     uint16_t save[INGOT_PROB_COUNT], pwhole[INGOT_PROB_COUNT];
     uint8_t patch[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
@@ -481,6 +484,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     int64_t cost_whole, cost_split = 0;
     int i, h = n >> 1, sidx = INGOT_SPLIT_IDX(n);
     int save_pm, try_pm;
+    int save_e, try_e;
     int wmode = -1;
 #if INGOT_PLAN
     int slot = 0;
@@ -492,12 +496,12 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         if (pl && pl->replay) {
             wmode = pl->buf[pl->pos++];
             return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                              n, base, plane, probs, pmode, lambda, &wmode, luma, lstride);
+                              n, base, plane, probs, pmode, lambda, &wmode, luma, lstride, pempty);
         }
 #endif
         {
             int64_t c = code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                                   n, base, plane, probs, pmode, lambda, &wmode, luma, lstride);
+                                   n, base, plane, probs, pmode, lambda, &wmode, luma, lstride, pempty);
 #if INGOT_PLAN
             if (pl) {
                 if (pl->len < INGOT_PLAN_MAX) pl->buf[pl->len++] = (int16_t)wmode;
@@ -518,7 +522,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
             BS_SPLIT_OFF();
             wmode = what;
             return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                              n, base, plane, probs, pmode, lambda, &wmode, luma, lstride);
+                              n, base, plane, probs, pmode, lambda, &wmode, luma, lstride, pempty);
         }
         BS_SPLIT_ON();
         ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1);
@@ -527,7 +531,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
             code_quad(w, orig, recon, pw, ph,
                       bx + (i & 1) * h, by + (i >> 1) * h,
                       gx0, gy0, h, base, plane, probs, pmode, lambda, pl,
-                      luma, lstride);
+                      luma, lstride, pempty);
         return 0;
     }
     /* 적는 중이다. 이 마디의 판단이 들어갈 칸을 먼저 잡아 둔다. */
@@ -540,14 +544,16 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     save_patch(recon, pw, ph, bx, by, n, patch);
     memcpy(save, probs, sizeof(save));
     save_pm = *pmode;
+    save_e = *pempty;
 
     /* 후보 1: 통째로 하나 */
     memcpy(pwhole, probs, sizeof(pwhole));
     try_pm = save_pm;
+    try_e = save_e;
     ingot_rc_enc_init(&trial, scratch, 0);
     cost_whole = code_block(&trial, orig, recon, pw, ph, bx, by, gx0, gy0,
                             n, base, plane, pwhole, &try_pm, lambda, &wmode,
-                            luma, lstride)
+                            luma, lstride, &try_e)
                + lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
 
@@ -562,6 +568,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 #endif
         memcpy(probs, save, sizeof(save));
         *pmode = save_pm;
+        *pempty = save_e;
 #if INGOT_PLAN
         if (pl) { pl->len = slot + 1; pl->buf[slot] = (int16_t)wmode; }
 #endif
@@ -570,23 +577,25 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
          * 부모가 이 값을 나눔 후보의 비용으로 더하므로 0 을 주면 나눔이
          * 실제보다 싸 보인다. */
         code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                   n, base, plane, probs, pmode, lambda, &wmode, luma, lstride);
+                   n, base, plane, probs, pmode, lambda, &wmode, luma, lstride, pempty);
         return cost_whole;
     }
 
     /* 후보 2: 넷으로. 앞 블록의 복원이 뒤 블록의 이웃이라 순서대로 굴려야 한다. */
     memcpy(probs, save, sizeof(save));
     try_pm = save_pm;
+    try_e = save_e;
     ingot_rc_enc_init(&trial, scratch, 0);
     for (i = 0; i < 4; i++)
         cost_split += code_quad(&trial, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
                                 gx0, gy0, h, base, plane, probs, &try_pm, lambda,
-                                pl, luma, lstride);
+                                pl, luma, lstride, &try_e);
     cost_split += lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
     memcpy(probs, save, sizeof(save));
     *pmode = save_pm;
+    *pempty = save_e;
 
     /* 이긴 쪽을 진짜로 쓴다. 계획이 있으면 다시 재지 않고 재생한다. */
     if (cost_whole <= cost_split) {
@@ -595,7 +604,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 #endif
         BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0); BS_SPLIT_OFF();
         code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                   n, base, plane, probs, pmode, lambda, &wmode, luma, lstride);
+                   n, base, plane, probs, pmode, lambda, &wmode, luma, lstride, pempty);
         return cost_whole;
     }
     BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1); BS_SPLIT_OFF();
@@ -610,7 +619,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
             code_quad(w, orig, recon, pw, ph,
                       bx + (i & 1) * h, by + (i >> 1) * h,
                       gx0, gy0, h, base, plane, probs, pmode, lambda, pl,
-                      luma, lstride);
+                      luma, lstride, pempty);
         pl->replay = save_rep;
         pl->pos = save_pos;
         pl->len = end;
@@ -622,7 +631,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         cost_split += code_quad(w, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
                                 gx0, gy0, h, base, plane, probs, pmode, lambda,
-                                pl, luma, lstride);
+                                pl, luma, lstride, &try_e);
     return cost_split;
 }
 
@@ -663,6 +672,7 @@ static void write_plane_group(ingot_rc_enc *w, const uint8_t *orig, uint8_t *rec
                               int base, int p, uint16_t *probs, int64_t lambda)
 {
     int my, mx, pmode = INGOT_PRED_DC;   /* 조각·평면마다 DC 에서 시작한다 */
+    int pempty = 0;                     /* 앞 블록이 비었는가 */
 #if INGOT_PLAN
     ingot_plan plan_store;
     plan_store.len = 0; plan_store.pos = 0; plan_store.replay = 0;
@@ -675,7 +685,7 @@ static void write_plane_group(ingot_rc_enc *w, const uint8_t *orig, uint8_t *rec
             plan_store.len = 0; plan_store.pos = 0; plan_store.replay = 0;
 #endif
             code_quad(w, orig, recon, pw, ph, ox + mx, oy + my, ox, oy,
-                      INGOT_MAX_BLOCK, base, p, probs, &pmode, lambda, PLAN_ARG, luma, lstride);
+                      INGOT_MAX_BLOCK, base, p, probs, &pmode, lambda, PLAN_ARG, luma, lstride, &pempty);
         }
 }
 
