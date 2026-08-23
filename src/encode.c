@@ -286,6 +286,7 @@ static int64_t mode_price(const uint16_t *probs, int pmode, int mode, int n)
     return c;
 }
 
+
 static void mode_write(ingot_rc_enc *w, uint16_t *probs, int pmode, int mode, int n)
 {
     int mo = INGOT_PROB_MODE + (pmode & 3) * 3, hi = (mode >> 1) & 1;
@@ -300,7 +301,7 @@ static void mode_write(ingot_rc_enc *w, uint16_t *probs, int pmode, int mode, in
 static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                           int pw, int ph, int bx, int by, int gx0, int gy0,
                           int n, int base, int plane, uint16_t *probs,
-                          int *pmode, int64_t lambda)
+                          int *pmode, int64_t lambda, int *mode_io)
 {
     int16_t src[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
             pred[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
@@ -319,6 +320,32 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     fetch_block(orig, pw, ph, bx, by, n, src);
     ingot_gather_neighbors(recon, pw, ph, bx, by, gx0, gy0, n, &nb);
 
+
+#if INGOT_PLAN
+    if (mode_io && *mode_io >= 0) {
+        /* 이미 고른 모드가 있다. 찾지 않고 그대로 쓴다 -- 찾아도 같은
+         * 답이 나온다(같은 확률 상태·같은 이웃에서 골랐다). */
+        best = *mode_io;
+        ingot_predict(&nb, best, best_pred);
+        for (k = 0; k < total; k++)
+            resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
+#ifdef INGOT_BIT_STATS
+        ingot_bitplane = plane ? 1 : 0;
+        ingot_bitcat = INGOT_BC_MODE;
+#endif
+        mode_write(w, probs, *pmode, best, n);
+#ifdef INGOT_BIT_STATS
+        ingot_bitcat = INGOT_BC_ZERO;
+#endif
+        *pmode = best;
+        code_residual(w, resid, base, n, plane, probs, best_pred, out,
+                      ingot_tx_of_mode(best), lambda);
+        store_recon(recon, pw, ph, bx, by, n, out);
+        return 0;      /* 재생 중에는 값을 안 쓴다 */
+    }
+#else
+    (void)mode_io;
+#endif
 
     /* 1단계: 잔차의 절대합으로 후보 순위를 매긴다. 담아 보지 않으므로 싸다. */
     for (m = 0; m < INGOT_PRED_COUNT; m++) {
@@ -387,6 +414,9 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     code_residual(w, resid, base, n, plane, probs, best_pred, out,
                   ingot_tx_of_mode(best), lambda);
     store_recon(recon, pw, ph, bx, by, n, out);
+#if INGOT_PLAN
+    if (mode_io) *mode_io = best;
+#endif
     return best_cost;
 }
 
@@ -433,7 +463,7 @@ static void restore_patch(uint8_t *recon, int pw, int ph,
 static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                          int pw, int ph, int bx, int by, int gx0, int gy0,
                          int n, int base, int plane, uint16_t *probs,
-                         int *pmode, int64_t lambda)
+                         int *pmode, int64_t lambda, ingot_plan *pl)
 {
     uint16_t save[INGOT_PROB_COUNT], pwhole[INGOT_PROB_COUNT];
     uint8_t patch[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
@@ -442,11 +472,60 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     int64_t cost_whole, cost_split = 0;
     int i, h = n >> 1, sidx = INGOT_SPLIT_IDX(n);
     int save_pm, try_pm;
+    int wmode = -1;
+#if INGOT_PLAN
+    int slot = 0;
+#endif
 
 
-    if (n <= INGOT_MIN_BLOCK)
-        return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                          n, base, plane, probs, pmode, lambda);
+    if (n <= INGOT_MIN_BLOCK) {
+#if INGOT_PLAN
+        if (pl && pl->replay) {
+            wmode = pl->buf[pl->pos++];
+            return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
+                              n, base, plane, probs, pmode, lambda, &wmode);
+        }
+#endif
+        {
+            int64_t c = code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
+                                   n, base, plane, probs, pmode, lambda, &wmode);
+#if INGOT_PLAN
+            if (pl) {
+                if (pl->len < INGOT_PLAN_MAX) pl->buf[pl->len++] = (int16_t)wmode;
+            }
+#endif
+            return c;
+        }
+    }
+
+#if INGOT_PLAN
+    /* 재생 중이면 적어 둔 판단을 그대로 따른다. 값은 이미 알고 있다. */
+    if (pl && pl->replay) {
+        int what;
+        what = pl->buf[pl->pos++];
+        if (what >= 0) {
+            BS_SPLIT_ON();
+            ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0);
+            BS_SPLIT_OFF();
+            wmode = what;
+            return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
+                              n, base, plane, probs, pmode, lambda, &wmode);
+        }
+        BS_SPLIT_ON();
+        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1);
+        BS_SPLIT_OFF();
+        for (i = 0; i < 4; i++)
+            code_quad(w, orig, recon, pw, ph,
+                      bx + (i & 1) * h, by + (i >> 1) * h,
+                      gx0, gy0, h, base, plane, probs, pmode, lambda, pl);
+        return 0;
+    }
+    /* 적는 중이다. 이 마디의 판단이 들어갈 칸을 먼저 잡아 둔다. */
+    if (pl) {
+        slot = pl->len;
+        if (pl->len < INGOT_PLAN_MAX) pl->len++;
+    }
+#endif
 
     save_patch(recon, pw, ph, bx, by, n, patch);
     memcpy(save, probs, sizeof(save));
@@ -457,7 +536,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     try_pm = save_pm;
     ingot_rc_enc_init(&trial, scratch, 0);
     cost_whole = code_block(&trial, orig, recon, pw, ph, bx, by, gx0, gy0,
-                            n, base, plane, pwhole, &try_pm, lambda)
+                            n, base, plane, pwhole, &try_pm, lambda, &wmode)
                + lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
 
@@ -472,10 +551,16 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 #endif
         memcpy(probs, save, sizeof(save));
         *pmode = save_pm;
+#if INGOT_PLAN
+        if (pl) { pl->len = slot + 1; pl->buf[slot] = (int16_t)wmode; }
+#endif
         BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0); BS_SPLIT_OFF();
-        return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                          n, base, plane, probs, pmode, lambda)
-             + lambda * INGOT_BIT_UNIT;
+        /* 모드를 물려주면 code_block 이 값을 안 돌려준다. 이미 잰 값을 쓴다 --
+         * 부모가 이 값을 나눔 후보의 비용으로 더하므로 0 을 주면 나눔이
+         * 실제보다 싸 보인다. */
+        code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
+                   n, base, plane, probs, pmode, lambda, &wmode);
+        return cost_whole;
     }
 
     /* 후보 2: 넷으로. 앞 블록의 복원이 뒤 블록의 이웃이라 순서대로 굴려야 한다. */
@@ -485,25 +570,47 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     for (i = 0; i < 4; i++)
         cost_split += code_quad(&trial, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
-                                gx0, gy0, h, base, plane, probs, &try_pm, lambda);
+                                gx0, gy0, h, base, plane, probs, &try_pm, lambda,
+                                pl);
     cost_split += lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
     memcpy(probs, save, sizeof(save));
     *pmode = save_pm;
 
-    /* 이긴 쪽을 진짜로 쓴다. */
+    /* 이긴 쪽을 진짜로 쓴다. 계획이 있으면 다시 재지 않고 재생한다. */
     if (cost_whole <= cost_split) {
+#if INGOT_PLAN
+        if (pl) { pl->len = slot + 1; pl->buf[slot] = (int16_t)wmode; }
+#endif
         BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0); BS_SPLIT_OFF();
-        return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                          n, base, plane, probs, pmode, lambda)
-             + lambda * INGOT_BIT_UNIT;
+        code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
+                   n, base, plane, probs, pmode, lambda, &wmode);
+        return cost_whole;
     }
     BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1); BS_SPLIT_OFF();
+#if INGOT_PLAN
+    if (pl) {
+        /* 아래 넷의 판단은 방금 잰 자리에 그대로 있다. 되감아 재생한다. */
+        int end = pl->len, save_pos = pl->pos, save_rep = pl->replay;
+        pl->buf[slot] = -1;
+        pl->pos = slot + 1;
+        pl->replay = 1;
+        for (i = 0; i < 4; i++)
+            code_quad(w, orig, recon, pw, ph,
+                      bx + (i & 1) * h, by + (i >> 1) * h,
+                      gx0, gy0, h, base, plane, probs, pmode, lambda, pl);
+        pl->replay = save_rep;
+        pl->pos = save_pos;
+        pl->len = end;
+        return cost_split;
+    }
+#endif
     cost_split = lambda * INGOT_BIT_UNIT;
     for (i = 0; i < 4; i++)
         cost_split += code_quad(w, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
-                                gx0, gy0, h, base, plane, probs, pmode, lambda);
+                                gx0, gy0, h, base, plane, probs, pmode, lambda,
+                                pl);
     return cost_split;
 }
 
@@ -532,15 +639,31 @@ void ingot_prob_dump(const char *path)
 }
 #endif
 
+#if INGOT_PLAN
+#define PLAN_ARG (&plan_store)
+#else
+#define PLAN_ARG ((ingot_plan *)0)
+#endif
+
 static void write_plane_group(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                               int pw, int ph, int ox, int oy, int gw, int gh,
                               int base, int p, uint16_t *probs, int64_t lambda)
 {
     int my, mx, pmode = INGOT_PRED_DC;   /* 조각·평면마다 DC 에서 시작한다 */
+#if INGOT_PLAN
+    ingot_plan plan_store;
+    plan_store.len = 0; plan_store.pos = 0; plan_store.replay = 0;
+#endif
     for (my = 0; my < gh; my += INGOT_MAX_BLOCK)
-        for (mx = 0; mx < gw; mx += INGOT_MAX_BLOCK)
+        for (mx = 0; mx < gw; mx += INGOT_MAX_BLOCK) {
+#if INGOT_PLAN
+            /* 덩어리마다 계획을 비운다. 안 비우면 금방 넘쳐서 뒤쪽 판단이
+             * 버려지고 재생이 어긋난다. */
+            plan_store.len = 0; plan_store.pos = 0; plan_store.replay = 0;
+#endif
             code_quad(w, orig, recon, pw, ph, ox + mx, oy + my, ox, oy,
-                      INGOT_MAX_BLOCK, base, p, probs, &pmode, lambda);
+                      INGOT_MAX_BLOCK, base, p, probs, &pmode, lambda, PLAN_ARG);
+        }
 }
 
 ingot_status ingot_encode(const uint8_t *rgb, int width, int height,

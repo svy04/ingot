@@ -275,6 +275,41 @@ static inline int ingot_tx_of_mode(int mode)
 #define INGOT_SPLIT_SKIP_AREA 0
 #endif
 
+/* 시험에서 내린 판단을 적어 두고 실제 인코딩에서 그대로 재생할지.
+ * 인코더만의 일이라 규격이 아니고, 나오는 바이트도 안 바뀐다.
+ *
+ * 지금은 같은 나무를 두 번 돈다 -- 값을 재려고 한 번, 이긴 쪽을 쓰려고
+ * 또 한 번이다. 깊이 한 단계마다 중복이 곱해져서 잔차 인코딩 횟수가
+ * 8x8 은 45, 16x16 은 365, 32x32 는 2,925, 64x64 는 23,405 회가 된다.
+ *
+ * 시험이 내린 판단은 실제 인코딩이 내릴 판단과 정확히 같다. 확률 모델도
+ * 복원 화소도 시험 전으로 되돌린 뒤 실제 인코딩을 하기 때문이다. 그래서
+ * 적어 두고 재생해도 바이트가 안 바뀌고, 골든 해시가 그것을 증명한다.
+ * 재생하면 횟수가 25 / 105 / 425 / 1,705 회로 준다.
+ *
+ * 실측: 인코딩 8.47 -> 4.54 초(1.86배), **나오는 바이트는 그대로다.**
+ * 그림 넷 x 품질 여섯, 스물네 건 전부 해시가 같다 (2026-08-23). */
+#ifndef INGOT_PLAN
+#define INGOT_PLAN 1
+#endif
+
+#if !INGOT_PLAN
+/* 손잡이를 꺼도 형은 있어야 서명이 하나로 유지된다. */
+typedef struct { int dummy; } ingot_plan;
+#endif
+
+#if INGOT_PLAN
+/* 한 덩어리의 판단을 담는 자리. 64x64 까지 341 칸이면 되고 여유를 둔다.
+ * 칸마다 -1 이면 「넷으로 나눔」, 0..3 이면 「통째로, 이 예측 모드」다. */
+#define INGOT_PLAN_MAX 512
+typedef struct {
+    int16_t buf[INGOT_PLAN_MAX];
+    int len;        /* 적은 칸 수 */
+    int pos;        /* 재생하며 읽는 자리 */
+    int replay;     /* 0 이면 적는 중, 1 이면 재생 중 */
+} ingot_plan;
+#endif
+
 typedef struct {
     int n;                      /* 블록 한 변. 4 부터 INGOT_MAX_BLOCK 까지 */
     int top[INGOT_MAX_BLOCK], left[INGOT_MAX_BLOCK], topleft;

@@ -134,6 +134,7 @@ static const char *g_bs_path;
 static void bs_at_exit(void) { if (g_bs_path) ingot_bitstat_dump(g_bs_path); }
 #endif
 
+
 int main(int argc, char **argv)
 {
 #ifdef INGOT_PROB_DUMP
