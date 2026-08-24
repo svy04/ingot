@@ -93,16 +93,40 @@ void ingot_restore_region(uint8_t *dst, const uint8_t *src, int w, int h,
     }
 }
 
-/* 한 조각에서 원본과 견주어 제곱오차가 가장 작은 번호를 고른다. 0 을
- * 포함하므로 어떤 조각에서도 안 거른 판보다 나빠지지 않는다. */
+#if INGOT_REST_PEN
+/* 결의 양. 이웃과의 차이(라플라시안) 절댓값 합이다. 흐리게 만들수록 준다. */
+static int64_t rest_detail(const uint8_t *p, int w, int h,
+                           int ox, int oy, int rw, int rh)
+{
+    int64_t s = 0;
+    int y, x, ch;
+    for (y = oy + 1; y < oy + rh - 1 && y < h - 1; y++)
+        for (x = ox + 1; x < ox + rw - 1 && x < w - 1; x++)
+            for (ch = 0; ch < 3; ch++) {
+                size_t o = ((size_t)y * w + x) * 3 + ch;
+                int d = 4 * (int)p[o] - (int)p[o - 3] - (int)p[o + 3]
+                      - (int)p[o - (size_t)w * 3] - (int)p[o + (size_t)w * 3];
+                s += d < 0 ? -d : d;
+            }
+    return s;
+}
+#endif
+
+/* 한 조각에서 가장 나은 번호를 고른다. 제곱오차만 보면 흐리게 만드는 쪽이
+ * 늘 이긴다 -- 흐리면 오차는 줄지만 결이 죽어 눈에는 더 나빠진다. 그래서
+ * 원본보다 결을 죽인 만큼을 벌점으로 더한다. 0 번(필터 없음)이 후보에
+ * 있으므로 어떤 조각에서도 안 거른 판보다 나빠지지 않는다. */
 int ingot_restore_pick(const uint8_t *orig, const uint8_t *dec, int w, int h,
                        int ox, int oy, int rw, int rh,
                        uint8_t *work, uint8_t *tmp)
 {
     int idx, best = 0, y, x, ch;
     int64_t bse = -1;
+#if INGOT_REST_PEN
+    int64_t dref = rest_detail(orig, w, h, ox, oy, rw, rh);
+#endif
     for (idx = 0; idx < 16; idx++) {
-        int64_t se = 0;
+        int64_t se = 0, cost;
         if (idx) {
             ingot_restore_region(work, dec, w, h, ox, oy, rw, rh, idx, tmp);
         }
@@ -113,7 +137,14 @@ int ingot_restore_pick(const uint8_t *orig, const uint8_t *dec, int w, int h,
                     int d = (int)(idx ? work[o] : dec[o]) - (int)orig[o];
                     se += (int64_t)d * d;
                 }
-        if (bse < 0 || se < bse) { bse = se; best = idx; }
+        cost = se;
+#if INGOT_REST_PEN
+        {
+            int64_t dv = rest_detail(idx ? work : dec, w, h, ox, oy, rw, rh);
+            if (dv < dref) cost += (dref - dv) * INGOT_REST_PEN;
+        }
+#endif
+        if (bse < 0 || cost < bse) { bse = cost; best = idx; }
     }
     return best;
 }

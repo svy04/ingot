@@ -201,7 +201,7 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
  * [1,2,1]/4 로 한 번 고르면 잡음이 줄고 잔차가 작아진다. 블록이 클수록
  * 예측이 멀리까지 미치므로 세게 건다. */
 #ifndef INGOT_REFFILT
-#define INGOT_REFFILT 0
+#define INGOT_REFFILT 1
 #endif
 
 /* 이 크기 이상일 때만 건다. */
@@ -945,6 +945,13 @@ static inline int ingot_ctx_last_e(int plane, int n, int prev_empty)
  * 없다. */
 #ifndef INGOT_RESTORE
 #define INGOT_RESTORE 0
+#endif
+
+/* 복원 필터를 고를 때 흐림에 매기는 벌점. 0 이면 제곱오차만 본다.
+ * 제곱오차만 보면 흐리게 만드는 쪽이 늘 이겨서 눈에는 더 나빠진다
+ * (2026-08-24: PSNR -0.40, SSIM -0.83 인데 지각은 +0.28). */
+#ifndef INGOT_REST_PEN
+#define INGOT_REST_PEN 0
 #endif
 
 void ingot_restore_region(uint8_t *dst, const uint8_t *src, int w, int h,
