@@ -523,7 +523,7 @@ static inline int ingot_dequantize(int level, int step)
 #define INGOT_QW_ALPHA 1
 #endif
 #ifndef INGOT_QW_CHROMA
-#define INGOT_QW_CHROMA 24   /* 지각 카드. 위 ALPHA16 주석 참조 */
+#define INGOT_QW_CHROMA 28   /* 지각 카드. 위 ALPHA16 주석 참조 */
 #endif
 
 /* 같은 기울기를 1/16 눈금으로 적는 자리. 기본값은 INGOT_QW_ALPHA 를 그대로
@@ -992,7 +992,7 @@ int ingot_restore_pick(const uint8_t *orig, const uint8_t *dec, int w, int h,
 #define INGOT_LF_BETA 16    /* beta = (step * BETA) >> 5. 평탄 판정 문턱 */
 #endif
 #ifndef INGOT_LF_TC
-#define INGOT_LF_TC 6       /* tc = (step * TC) >> 7. 지각 카드 */
+#define INGOT_LF_TC 4       /* tc = (step * TC) >> 7. 지각 카드 */
 #endif
 
 void ingot_loopfilter(uint8_t *pl, int pw, int ox, int oy, int gw, int gh,
