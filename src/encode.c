@@ -979,6 +979,9 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
 #if INGOT_RESTORE
                 if (glen[gi] > 0x0FFFFFFFu) { st = INGOT_ERR_MEMORY; goto done; }
 #endif
+#if INGOT_GUIDED
+                if (glen[gi] > 0x00FFFFFFu) { st = INGOT_ERR_MEMORY; goto done; }
+#endif
                 ingot_put32(buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY,
                             (uint32_t)glen[gi]);
 #else
@@ -1010,6 +1013,46 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
      * 손상을 잡는다. 머리말 자체는 빼고 계산해야 여기에 써 넣을 수 있다. */
     ingot_put32(buf + 20, ingot_hash32(buf + INGOT_HEADER_SIZE,
                                        data_off - INGOT_HEADER_SIZE));
+
+#if INGOT_GUIDED
+    /* 자기 출력을 풀어서 조각마다 섞기 비율을 최소제곱으로 푼다.
+     * 고르는 것이 아니라 푸는 것이라, 흐린 쪽이 이기는 일이 없다.
+     * 해시는 머리말을 빼고 계산하므로 목차를 고친 뒤 다시 남긴다. */
+    {
+        uint8_t *drgb = NULL, *g1 = NULL, *g2 = NULL;
+        int64_t *work = NULL;
+        int dw = 0, dh = 0;
+        size_t n3 = (size_t)width * (size_t)height * 3;
+        size_t wn = (size_t)(width + 1) * (size_t)(height + 1);
+        if (ingot_decode(buf, data_off, &drgb, &dw, &dh) == INGOT_OK &&
+            dw == width && dh == height) {
+            g1 = (uint8_t *)malloc(n3);
+            g2 = (uint8_t *)malloc(n3);
+            work = (int64_t *)malloc(wn * 2 * sizeof(int64_t));
+            if (g1 && g2 && work) {
+                ingot_guided_pair(drgb, width, height, qbase, g1, g2, work);
+                for (gi = 0; gi < group_count; gi++) {
+                    uint32_t gx = gi % gx_count, gy = gi / gx_count;
+                    int ox = (int)gx * gsize, oy = (int)gy * gsize;
+                    int gw = width - ox, gh = height - oy;
+                    uint8_t *e = buf + toc_off + (size_t)gi * INGOT_TOC_ENTRY;
+                    int wa = 0, wb = 0;
+                    if (gw > gsize) gw = gsize;
+                    if (gh > gsize) gh = gsize;
+                    ingot_guided_solve(rgb, drgb, g1, g2, width,
+                                       ox, oy, gw, gh, &wa, &wb);
+                    ingot_put32(e, ingot_get32(e)
+                                   | ((uint32_t)wa << 24)
+                                   | ((uint32_t)wb << 28));
+                }
+                ingot_put32(buf + 20,
+                            ingot_hash32(buf + INGOT_HEADER_SIZE,
+                                         data_off - INGOT_HEADER_SIZE));
+            }
+        }
+        free(g1); free(g2); free(work); free(drgb);
+    }
+#endif
 
 #if INGOT_RESTORE
     /* 자기 출력을 실제로 풀어서 조각마다 복원 필터를 고른다. 열다섯 후보를 다 걸어

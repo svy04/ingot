@@ -1164,6 +1164,43 @@ static inline int ingot_ctx_last_e(int plane, int n, int prev_empty)
 void ingot_deringe(uint8_t *dst, const uint8_t *src, int pw, int ph,
                    int ox, int oy, int gw, int gh, int base, int chroma);
 
+/* ---- 자기 유도 필터 두 장 섞기 (guided.c) ----
+ *
+ * 복원 필터는 후보 열여섯 중 하나를 골라서 흐린 쪽이 늘 이겼다. 이것은
+ * 고르지 않고 두 장을 만들어 **섞는 비율을 최소제곱으로 푼다.**
+ * 인코더가 원본을 보고 풀므로 제곱오차를 직접 줄인다.
+ *
+ * AV1 의 루프 복원 가운데 dual self-guided filter 를 읽고 만들었다. */
+#ifndef INGOT_GUIDED
+#define INGOT_GUIDED 1
+#endif
+
+/* 자기 유도 필터의 잡음 값. 양자화 스텝 제곱의 64 분모다.
+ * 신호하지 않는다 -- 디코더도 품질에서 같은 값을 구한다. */
+#ifndef INGOT_GUIDED_E1
+#define INGOT_GUIDED_E1 1
+#endif
+#ifndef INGOT_GUIDED_E2
+#define INGOT_GUIDED_E2 4
+#endif
+
+void ingot_guided_pair(const uint8_t *rgb, int w, int h, int base,
+                       uint8_t *r1, uint8_t *r2, int64_t *work);
+void ingot_guided_apply(uint8_t *rgb, const uint8_t *r1, const uint8_t *r2,
+                        int w, int ox, int oy, int rw, int rh,
+                        int wa, int wb);
+void ingot_guided_solve(const uint8_t *orig, const uint8_t *rgb,
+                        const uint8_t *r1, const uint8_t *r2,
+                        int w, int ox, int oy, int rw, int rh,
+                        int *wa, int *wb);
+
+/* 섞기 비율은 조각마다 4비트씩 목차 항목의 위 여덟 비트에 담는다. */
+#if INGOT_GUIDED
+#define INGOT_TOC_LEN2(v)  ((v) & 0x00FFFFFFu)
+#define INGOT_TOC_WA(v)    ((int)(((v) >> 24) & 0x0Fu))
+#define INGOT_TOC_WB(v)    ((int)(((v) >> 28) & 0x0Fu))
+#endif
+
 /* ---- 복원 필터 (restore.c) ----
  *
  * 블록 경계 필터 다음에 오는 두 번째 필터다. 계수를 실어 보내지 않고 미리

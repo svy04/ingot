@@ -367,7 +367,11 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         for (g = 0; g < h.group_count; g++) {
             const uint8_t *e = data + toc + (size_t)g * INGOT_TOC_ENTRY;
 #if INGOT_TOC4
+#if INGOT_GUIDED
+            uint32_t len = INGOT_TOC_LEN2(ingot_get32(e));
+#else
             uint32_t len = INGOT_TOC_LEN(ingot_get32(e));
+#endif
 #else
             uint32_t off = ingot_get32(e), len = ingot_get32(e + 4);
             if ((uint64_t)off > (uint64_t)size) return INGOT_ERR_TOC;
@@ -412,7 +416,11 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         const uint8_t *entry = data + h.toc_off + (size_t)gi * INGOT_TOC_ENTRY;
 #if INGOT_TOC4
         /* 오프셋은 앞 조각들의 길이 합이다. 목차에 안 적혀 있다. */
+#if INGOT_GUIDED
+        uint32_t len = INGOT_TOC_LEN2(ingot_get32(entry));
+#else
         uint32_t len = INGOT_TOC_LEN(ingot_get32(entry));
+#endif
         uint32_t off = (uint32_t)run_off;
 #else
         uint32_t off = ingot_get32(entry);
@@ -469,6 +477,33 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
     }
 
     ingot_ycbcr_to_rgb(plane[0], cb, cr, h.width * h.height, rgb);
+#if INGOT_GUIDED
+    /* 자기 유도 필터 두 장을 만들고, 조각마다 실려 온 비율로 섞는다. */
+    {
+        size_t n3 = (size_t)h.width * (size_t)h.height * 3;
+        size_t wn = (size_t)(h.width + 1) * (size_t)(h.height + 1);
+        uint8_t *g1 = (uint8_t *)malloc(n3);
+        uint8_t *g2 = (uint8_t *)malloc(n3);
+        int64_t *work = (int64_t *)malloc(wn * 2 * sizeof(int64_t));
+        if (g1 && g2 && work) {
+            uint32_t g;
+            ingot_guided_pair(rgb, h.width, h.height, qbase, g1, g2, work);
+            for (g = 0; g < h.group_count; g++) {
+                const uint8_t *e = data + h.toc_off
+                                 + (size_t)g * INGOT_TOC_ENTRY;
+                uint32_t raw = ingot_get32(e);
+                uint32_t gx = g % h.gx_count, gy = g / h.gx_count;
+                int ox = (int)gx * h.gsize, oy = (int)gy * h.gsize;
+                int gw = h.width - ox, gh = h.height - oy;
+                if (gw > h.gsize) gw = h.gsize;
+                if (gh > h.gsize) gh = h.gsize;
+                ingot_guided_apply(rgb, g1, g2, h.width, ox, oy, gw, gh,
+                                   INGOT_TOC_WA(raw), INGOT_TOC_WB(raw));
+            }
+        }
+        free(g1); free(g2); free(work);
+    }
+#endif
 #if INGOT_RESTORE
     /* 조각마다 고른 복원 필터를 건다. 참조는 언제나 거르기 전 사본이라
      * 조각마다 번호가 달라도 서로의 결과를 안 본다. */
