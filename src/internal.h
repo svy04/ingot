@@ -535,7 +535,7 @@ static inline int ingot_dequantize(int level, int step)
  * 된다 -- 셋을 따로 재면 지각 -2.86 / PSNR +1.00 이지만 함께 재면
  * 지각 -2.76 / PSNR +0.48 이다. 셋이 같은 화소를 서로 다른 방향에서
  * 건드려서 손해가 안 더해진다고 본다(추정). */
-#define INGOT_QW_ALPHA16 20
+#define INGOT_QW_ALPHA16 28
 #endif
 
 /* 고주파 가중의 자리를 블록 크기로 맞출지. 규격이 바뀐다.
