@@ -44,6 +44,39 @@ void ingot_gather_neighbors(const uint8_t *recon, int pw, int ph,
         nb->left[i] = nb->has_left
             ? (int)recon[(size_t)ly * pw + (bx - 1)] : 128;
     }
+
+    /* 위 행 오른쪽 확장. 그 자리가 이미 복원됐을 때만 쓴다.
+     *
+     * 블록은 최상위 격자 안에서 Z 순서로 돈다. by 가 격자 경계에 있으면
+     * 위 행은 한 줄 위의 격자 행이고 그 행은 통째로 끝나 있다 -- 오른쪽으로
+     * 얼마든지 봐도 된다. 격자 안쪽이면 같은 격자의 위 절반만 끝나 있으므로
+     * 그 격자의 오른쪽 끝까지만 본다. 못 보는 자리는 마지막 값을 되풀이한다.
+     * 인코더와 디코더가 같은 규칙으로 판단하므로 어긋나지 않는다. */
+    nb->top_n = n;
+#if INGOT_TOPRIGHT
+    if (nb->has_top) {
+        int mb = INGOT_MAX_BLOCK;
+        int lim;
+        if (((by - gy0) & (mb - 1)) == 0) {
+            lim = pw;                       /* 위 격자 행은 다 끝났다 */
+        } else {
+            int gcol = (bx - gx0) / mb;     /* 이 블록이 든 격자 칸 */
+            lim = gx0 + (gcol + 1) * mb;
+            if (lim > pw) lim = pw;
+        }
+        for (i = n; i < 2 * n; i++) {
+            int tx = bx + i;
+            nb->top[i] = (tx < lim && tx < pw)
+                ? (int)recon[(size_t)(by - 1) * pw + tx]
+                : nb->top[i - 1];
+        }
+        nb->top_n = 2 * n;
+    } else {
+        for (i = n; i < 2 * n; i++) nb->top[i] = 128;
+    }
+#else
+    for (i = n; i < 2 * n; i++) nb->top[i] = nb->top[n - 1];
+#endif
     nb->topleft = nb->has_topleft
         ? (int)recon[(size_t)(by - 1) * pw + (bx - 1)] : 128;
 #if INGOT_CFL
@@ -90,9 +123,10 @@ static void pred_angle(const ingot_neighbors *nb, int dx, int inv, int16_t *pred
             int idx = (x << 5) + (y + 1) * dx;
             int b, f, p0, p1, v;
             if (idx >= 0) {
+                int tn = nb->top_n;
                 b = idx >> 5; f = idx & 31;
-                p0 = nb->top[b < n ? b : n - 1];
-                p1 = nb->top[(b + 1) < n ? (b + 1) : n - 1];
+                p0 = nb->top[b < tn ? b : tn - 1];
+                p1 = nb->top[(b + 1) < tn ? (b + 1) : tn - 1];
             } else {
                 int idy = (y << 5) + (x + 1) * inv;
                 b = idy >> 5; f = idy & 31;

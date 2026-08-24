@@ -186,6 +186,15 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #define INGOT_MODES32 0
 #endif
 
+/* 위 행을 오른쪽으로 한 블록 더 볼지. 규격이 바뀌지만 **비트 대가가 0**
+ * 이다 -- 인코더와 디코더가 같은 규칙으로 가용성을 판단한다.
+ *
+ * 오른쪽 아래로 뻗는 각도는 블록 너비를 넘어가는데, 지금은 위 행 마지막
+ * 화소를 되풀이한다. 그 되풀이가 계단 결을 만든다. */
+#ifndef INGOT_TOPRIGHT
+#define INGOT_TOPRIGHT 0
+#endif
+
 #if INGOT_MODES32 && !defined(INGOT_MODES16_FORCED)
 #undef INGOT_MODES16
 #define INGOT_MODES16 1
@@ -549,8 +558,11 @@ typedef struct {
 
 typedef struct {
     int n;                      /* 블록 한 변. 4 부터 INGOT_MAX_BLOCK 까지 */
-    int top[INGOT_MAX_BLOCK], left[INGOT_MAX_BLOCK], topleft;
+    /* 위 행은 오른쪽으로 한 블록 더 잡아 둔다. 오른쪽 아래로 뻗는 각도가
+     * 블록 너비를 넘어가는데, 없으면 마지막 화소를 되풀이하게 된다. */
+    int top[INGOT_MAX_BLOCK * 2], left[INGOT_MAX_BLOCK], topleft;
     int has_top, has_left, has_topleft;
+    int top_n;                  /* 실제로 채운 위 행 길이. n 또는 2n */
 #if INGOT_CFL
     /* 색차를 담을 때만 채운다. 같은 자리의 휘도 복원값이다. */
     const uint8_t *luma;    /* 휘도 평면. 색차가 아니면 NULL */
