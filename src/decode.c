@@ -405,7 +405,7 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         run_off = (size_t)off + len;
 #endif
         ingot_rc_dec_init(&r, data + off, len);
-        ingot_prob_reset(probs, INGOT_PROB_COUNT);
+        ingot_prob_reset(probs, INGOT_PROB_COUNT, h.quality);
 
         if (read_plane_group(&r, plane[0], NULL, 0, h.width, h.height,
                              ox, oy, gw, gh,

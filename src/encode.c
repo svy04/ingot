@@ -907,7 +907,7 @@ ingot_status ingot_encode(const uint8_t *rgb, int width, int height,
                 cgh = ch - coy; if (cgh > csize) cgh = csize;
 
                 ingot_rc_enc_init(&w, buf + data_off + (size_t)gsi * slot, slot);
-                ingot_prob_reset(probs, INGOT_PROB_COUNT);
+                ingot_prob_reset(probs, INGOT_PROB_COUNT, quality);
 
                 write_plane_group(&w, plane[0], recon[0], NULL, 0, width, height,
                                   ox, oy, gw, gh, qbase, 0, probs, lambda);

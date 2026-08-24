@@ -347,6 +347,14 @@ static const uint16_t ingot_prob_init[3102] = {
 };
 #define INGOT_PROB_TAB ingot_prob_init
 
+/* 고품질 전용 시작표. 조각마다 표를 처음부터 배우므로 시작이 어긋나면 그
+ * 조각 전체가 손해다. 디코더도 품질을 알므로 **신호할 비트가 0** 이다.
+ * 조각을 1024 로 키운 뒤로는 이득이 0.05~0.16% 라 꺼 두었다. */
+#if INGOT_PROB_HI
+extern const uint16_t ingot_prob_init_hi[];
+extern const int ingot_prob_init_hi_count;
+#endif
+
 /* 표는 지금 문맥 배치에 맞춰 학습된 것이다. 배치를 바꾸는 손잡이
  * (INGOT_NBLEV·INGOT_CTX_BYSIZE 등)를 돌리면 칸 번호가 밀려 표가 엉뚱한
  * 자리에 깔린다. 그 상태로 재면 그 손잡이가 가짜 벌점을 받는다 — 실측으로
@@ -356,7 +364,7 @@ static const uint16_t ingot_prob_init[3102] = {
 #error "학습 확률표 3102 칸이 지금 문맥 배치와 안 맞는다. tools/learn_probs.py 로 다시 배워 심거나, 견주는 양쪽 모두 -DINGOT_PROB_LEARN 으로 표를 걷고 재라."
 #endif
 
-void ingot_prob_reset(uint16_t *p, int count)
+void ingot_prob_reset(uint16_t *p, int count, int qual)
 {
 #ifdef INGOT_PROB_LEARN
     /* 표를 학습하는 중에는 표를 안 쓴다. 안 그러면 이미 배운 값 위에서 또
@@ -368,8 +376,17 @@ void ingot_prob_reset(uint16_t *p, int count)
     }
 #endif
     int i, have = (int)(sizeof(INGOT_PROB_TAB) / sizeof(INGOT_PROB_TAB[0]));
+    const uint16_t *tab = INGOT_PROB_TAB;
+#if INGOT_PROB_HI
+    if (qual >= 0 && qual < INGOT_PROB_HI_Q &&
+        ingot_prob_init_hi_count == have) {
+        tab = ingot_prob_init_hi;
+    }
+#else
+    (void)qual;
+#endif
     for (i = 0; i < count; i++)
-        p[i] = (i < have) ? INGOT_PROB_TAB[i] : RC_PROB_INIT;
+        p[i] = (i < have) ? tab[i] : RC_PROB_INIT;
 }
 
 /* ---------------- 쓰기 ---------------- */

@@ -61,7 +61,7 @@ typedef enum {
 #define INGOT_MAX_DIM       65535
 #define INGOT_MAX_PIXELS    100000000u   /* 100 million */
 #define INGOT_GROUP_LOG2_MIN 6
-#define INGOT_GROUP_LOG2_MAX 10
+#define INGOT_GROUP_LOG2_MAX 11
 
 /* Encoder settings. Call ingot_encode_options_default() first, then adjust. */
 typedef struct {

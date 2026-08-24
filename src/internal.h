@@ -879,7 +879,21 @@ static inline int ingot_ctx_level(int nb)
 
 static inline int ingot_band_of(int kk)
 {
-#if INGOT_BANDS == 8
+#if INGOT_BANDS == 11
+    /* 조각을 1024 로 키우면서 무리마다 배울 표본이 늘었다. 저주파를 더 잘게
+     * 가를 여유가 생겼는지 본다 (2026-08-24). */
+    if (kk == 0) return 0;
+    if (kk <= 1) return 1;
+    if (kk <= 2) return 2;
+    if (kk <= 3) return 3;
+    if (kk <= 5) return 4;
+    if (kk <= 8) return 5;
+    if (kk <= 12) return 6;
+    if (kk <= 20) return 7;
+    if (kk <= 32) return 8;
+    if (kk <= 48) return 9;
+    return 10;
+#elif INGOT_BANDS == 8
     if (kk == 0) return 0;
     if (kk <= 1) return 1;
     if (kk <= 2) return 2;
@@ -1134,7 +1148,18 @@ typedef struct {
 #define INGOT_BIT_UNIT 16
 
 uint32_t ingot_rc_price(uint16_t prob, int bit);
-void ingot_prob_reset(uint16_t *p, int count);
+/* 고품질 전용 시작표를 쓸지. 규격이 바뀌지만 **비트 대가가 0** 이다 --
+ * 디코더도 품질을 알고 같은 표를 고른다. */
+#ifndef INGOT_PROB_HI
+#define INGOT_PROB_HI 0
+#endif
+
+/* 이 품질 번호보다 작으면(= 더 고품질이면) 고품질 표를 쓴다. */
+#ifndef INGOT_PROB_HI_Q
+#define INGOT_PROB_HI_Q 16
+#endif
+
+void ingot_prob_reset(uint16_t *p, int count, int qual);
 
 void ingot_rc_enc_init(ingot_rc_enc *e, uint8_t *buf, size_t cap);
 void ingot_rc_enc_bit(ingot_rc_enc *e, uint16_t *prob, int bit);
