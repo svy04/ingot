@@ -171,7 +171,7 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
  * 우리 이웃은 위 n 개와 왼쪽 n 개뿐이라, 위 행 오른쪽으로 뻗는 각도는
  * 마지막 값을 되풀이하게 된다. */
 #ifndef INGOT_MODES8
-#define INGOT_MODES8 0
+#define INGOT_MODES8 1
 #endif
 
 #if INGOT_MODES8
@@ -339,7 +339,7 @@ static inline int ingot_tx_of_mode(int mode)
  * 코어를 그만큼 덜 쓴다. 규격이 아니라 인코더의 기본값이므로,
  * 병렬이 급한 쪽은 INGOT_GROUP 으로 256 을 그대로 쓸 수 있다. */
 #ifndef INGOT_GROUP_DEFAULT
-#define INGOT_GROUP_DEFAULT 9
+#define INGOT_GROUP_DEFAULT 10
 #endif
 
 /* 경계 가중을 그림 안 16 격자로 매긴다. 블록의 끝 열·행으로 매기면
@@ -424,7 +424,7 @@ static inline int ingot_tx_gain256(int n)
 #endif
 
 #ifndef INGOT_MODE_TRIALS
-#define INGOT_MODE_TRIALS 4
+#define INGOT_MODE_TRIALS 8
 #endif
 
 /* 통째로 담는 값이 이 비트 수보다 싸면 나누는 쪽을 아예 재지 않는다.

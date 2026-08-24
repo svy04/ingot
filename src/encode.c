@@ -273,7 +273,7 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
  * INGOT_EDGE 는 16 분모다. 16 이면 예전과 같다. 규격이 아니라 인코더의
  * 판단이므로 이 값을 바꿔도 옛 파일이 그대로 읽힌다. */
 #ifndef INGOT_EDGE
-#define INGOT_EDGE 32   /* 재서 정했다: 32/16 에서 전 칸이 조금씩 좋아진다 (2026-08-22) */
+#define INGOT_EDGE 16   /* 재서 정했다: 32/16 에서 전 칸이 조금씩 좋아진다 (2026-08-22) */
 #endif
 
 static int64_t block_distortion_n(const int16_t *a, const int16_t *b,
