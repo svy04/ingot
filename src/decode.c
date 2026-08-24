@@ -298,6 +298,20 @@ static int read_plane_group(ingot_rc_dec *r, uint8_t *plane,
                           INGOT_MAX_BLOCK, base, p, probs, &pmode, map, ms, luma, lstride, &pempty))
                 return 1;
     if (lf) ingot_loopfilter(plane, pw, ox, oy, gw, gh, map, ms, base, p ? 1 : 0);
+#if INGOT_DERINGE
+    /* 경계 필터 다음에 건다. 거르기 전 사본에서 읽어야 옆 화소가 이미
+     * 걸러진 값에 물들지 않는다. */
+    {
+        size_t n = (size_t)pw * (size_t)ph;
+        uint8_t *pre = (uint8_t *)malloc(n);
+        if (pre) {
+            memcpy(pre, plane, n);
+            ingot_deringe(plane, pre, pw, ph, ox, oy, gw, gh, base,
+                          p ? 1 : 0);
+            free(pre);
+        }
+    }
+#endif
     return 0;
 }
 

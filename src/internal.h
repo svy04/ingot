@@ -1137,6 +1137,33 @@ static inline int ingot_ctx_last_e(int plane, int n, int prev_empty)
  * 중 하나를 적는다. 둘 다 블록 크기(4·8·16)로만 갈린다 — 3 + 21 = 24 자리다. */
 /* 쓸 수 있는 모드가 둘뿐인 자리(조각의 맨 위 줄·맨 왼쪽 줄)는 한 비트로
  * 끝난다. 그 비트의 뜻이 네 모드일 때의 첫 비트와 다르므로 자리를 따로 둔다. */
+/* ---- 결을 따라 거는 잔물결 필터 (deringe.c) ----
+ *
+ * 블록 경계 필터는 경계만 문지르고 블록 안쪽 잔물결은 남는다. 이 필터는
+ * 8x8 마다 결이 흐르는 방향을 복원값에서 재고 그 방향으로만 고른다.
+ * **신호할 비트가 0** 이다. AV1 의 CDEF 를 읽고 만들었다. */
+#ifndef INGOT_DERINGE
+#define INGOT_DERINGE 1
+#endif
+
+/* 세기. 양자화 스텝의 64 분모다. */
+#ifndef INGOT_DERINGE_STR
+#define INGOT_DERINGE_STR 2
+#endif
+
+/* 차이가 세기를 넘을 때 0 으로 내려가는 기울기. 클수록 천천히 내려간다. */
+#ifndef INGOT_DERINGE_DAMP
+#define INGOT_DERINGE_DAMP 3
+#endif
+
+/* 색차에 곱하는 배수. 16 분모다. */
+#ifndef INGOT_DERINGE_CHROMA
+#define INGOT_DERINGE_CHROMA 12
+#endif
+
+void ingot_deringe(uint8_t *dst, const uint8_t *src, int pw, int ph,
+                   int ox, int oy, int gw, int gh, int base, int chroma);
+
 /* ---- 복원 필터 (restore.c) ----
  *
  * 블록 경계 필터 다음에 오는 두 번째 필터다. 계수를 실어 보내지 않고 미리
