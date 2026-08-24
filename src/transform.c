@@ -534,10 +534,18 @@ static const uint16_t ingot_zz64[4096] = {
 };
 #endif
 
+#if INGOT_BLK128
+extern const int16_t ingot_dct128[128][128];
+extern const uint16_t ingot_zz128[128 * 128];
+#endif
+
 const uint16_t *ingot_zigzag_of(int n)
 {
 #if INGOT_BLK64
     if (n == 64) return ingot_zz64;
+#endif
+#if INGOT_BLK128
+    if (n == 128) return ingot_zz128;
 #endif
 #if INGOT_BLK32
     if (n == 32) return ingot_zz32;
@@ -547,6 +555,9 @@ const uint16_t *ingot_zigzag_of(int n)
 
 static const int16_t *dct_of(int n)
 {
+#if INGOT_BLK128
+    if (n == 128) return &ingot_dct128[0][0];
+#endif
 #if INGOT_BLK64
     if (n == 64) return &ingot_dct64[0][0];
 #endif
@@ -594,11 +605,12 @@ void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n, int tx)
     int shift = (n == 4) ? INGOT_FWD_SHIFT4
               : (n == 8) ? INGOT_FWD_SHIFT8
               : (n == 16) ? INGOT_FWD_SHIFT16
-              : (n == 32) ? INGOT_FWD_SHIFT32 : INGOT_FWD_SHIFT64;
+              : (n == 32) ? INGOT_FWD_SHIFT32
+              : (n == 64) ? INGOT_FWD_SHIFT64 : INGOT_FWD_SHIFT128;
     /* 64 점은 1단 누산이 커서 2단이 int32 를 넘친다(한계의 394%). 1단
      * 결과를 미리 내려 49.2% 로 낮춘다. 왕복 오차는 안 내린 판과 같다
      * (무작위 잔차 20 블록, 최대 6·제곱평균제곱근 1.43). */
-    int pre = (n == 64) ? INGOT_FWD_PRE64 : 0;
+    int pre = (n == 64) ? INGOT_FWD_PRE64 : (n == 128) ? INGOT_FWD_PRE128 : 0;
     int u, v, x, y;
 
     for (y = 0; y < n; y++) {
@@ -636,7 +648,8 @@ void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n, int tx)
     int shift = (n == 4) ? INGOT_INV_SHIFT4
               : (n == 8) ? INGOT_INV_SHIFT8
               : (n == 16) ? INGOT_INV_SHIFT16
-              : (n == 32) ? INGOT_INV_SHIFT32 : INGOT_INV_SHIFT64;
+              : (n == 32) ? INGOT_INV_SHIFT32
+              : (n == 64) ? INGOT_INV_SHIFT64 : INGOT_INV_SHIFT128;
     int u, v, x, y;
 
     for (u = 0; u < n; u++) {

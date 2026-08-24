@@ -76,6 +76,26 @@
  * 32->64 는 -0.5% 대를 2.15배로 사는 셈이다. 디코딩이 1.7배 느려지는 것은
  * 쓰는 사람에게 그대로 간다. 인코더를 빠르게 만든 뒤 다시 건다
  * (2026-08-23). */
+/* 128 블록까지 갈지. 고품질에서 평탄한 그림에 가장 크게 지는데, 그런 그림은
+ * 머리말이 파일의 13~16% 를 쓴다. 넓은 평탄면을 통째로 담으면 그 머리말이
+ * 4분의 1로 준다. 표는 src/dct128.c 에 있다.
+ *
+ * 스택을 많이 쓴다 -- 재귀 한 단계마다 128*128 짜리 배열이 잡힌다. */
+#ifndef INGOT_BLK128
+#define INGOT_BLK128 0
+#endif
+
+#if INGOT_BLK128 && !defined(INGOT_BLK64_FORCED)
+#undef INGOT_BLK64
+#define INGOT_BLK64 1
+#define INGOT_BLK64_FORCED 1
+#endif
+
+/* 128 점 변환의 시프트. 상수 블록의 DC 가 64 점의 두 배라 하나씩 더 준다. */
+#define INGOT_FWD_SHIFT128 17
+#define INGOT_INV_SHIFT128 21
+#define INGOT_FWD_PRE128   4
+
 #ifndef INGOT_BLK64
 #define INGOT_BLK64 1
 #endif
@@ -97,7 +117,9 @@
 #define INGOT_FWD_SHIFT32 15
 #define INGOT_INV_SHIFT32 19
 
-#if INGOT_BLK64
+#if INGOT_BLK128
+#define INGOT_MAX_BLOCK   128
+#elif INGOT_BLK64
 #define INGOT_MAX_BLOCK   64
 #elif INGOT_BLK32
 #define INGOT_MAX_BLOCK   32
@@ -825,7 +847,9 @@ static inline int ingot_qstep_aq(int base, int idx, int n, int plane, int aqm)
 #define INGOT_NBLEV 7
 #endif
 
-#if INGOT_BLK64
+#if INGOT_BLK128
+#define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 6 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
+#elif INGOT_BLK64
 #define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 5 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
 #elif INGOT_BLK32
 /* 32 를 켜면 크기 무리가 하나 는다. BYSIZE==1 은 「16 인가」였으니
@@ -835,7 +859,9 @@ static inline int ingot_qstep_aq(int base, int idx, int n, int plane, int aqm)
 #define INGOT_CTX_SIZES ((INGOT_CTX_BYSIZE == 2) ? 3 : (INGOT_CTX_BYSIZE == 1) ? 2 : 1)
 #endif
 #define INGOT_CTX_BASE  (INGOT_CTX_SIZES * INGOT_BANDS * INGOT_NBLEV * 2)
-#if INGOT_BLK64
+#if INGOT_BLK128
+#define INGOT_CTX_LASTN 6
+#elif INGOT_BLK64
 #define INGOT_CTX_LASTN 5
 #elif INGOT_BLK32
 #define INGOT_CTX_LASTN 4
@@ -1083,7 +1109,9 @@ static inline int ingot_ctx_last_e(int plane, int n, int prev_empty)
 #define INGOT_PROB_PER_CTX 13
 #endif
 #define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
-#if INGOT_BLK64
+#if INGOT_BLK128
+#define INGOT_SPLIT_LEVELS 5     /* 128->64, 64->32, 32->16, 16->8, 8->4 */
+#elif INGOT_BLK64
 #define INGOT_SPLIT_LEVELS 4              /* 64->32, 32->16, 16->8, 8->4 */
 #elif INGOT_BLK32
 #define INGOT_SPLIT_LEVELS 3                        /* 32->16, 16->8, 8->4 */
@@ -1092,7 +1120,9 @@ static inline int ingot_ctx_last_e(int plane, int n, int prev_empty)
 #endif
 #define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + INGOT_SPLIT_LEVELS)
 /* 나눔 비트의 모델 자리. 큰 크기부터 0 번이다. */
-#if INGOT_BLK64
+#if INGOT_BLK128
+#define INGOT_SPLIT_IDX(n) ((n) == 128 ? 0 : (n) == 64 ? 1 : (n) == 32 ? 2                           : (n) == 16 ? 3 : 4)
+#elif INGOT_BLK64
 #define INGOT_SPLIT_IDX(n) ((n) == 64 ? 0 : (n) == 32 ? 1 : (n) == 16 ? 2 : 3)
 #elif INGOT_BLK32
 #define INGOT_SPLIT_IDX(n) ((n) == 32 ? 0 : (n) == 16 ? 1 : 2)
