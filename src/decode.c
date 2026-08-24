@@ -196,12 +196,22 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
     (void)luma; (void)lstride;
 #endif
     {
+#if INGOT_MODES8
+        /* 여덟 모드: 앞 블록의 모드를 문맥으로 세 비트. */
+        int mo = INGOT_PROB_MODE + (*pmode & 7) * 7;
+        int b2 = ingot_rc_dec_bit(r, &probs[mo + 0]);
+        int b1 = ingot_rc_dec_bit(r, &probs[mo + 1 + b2]);
+        int b0 = ingot_rc_dec_bit(r, &probs[mo + 3 + b2 * 2 + b1]);
+        mode = (uint32_t)((b2 << 2) | (b1 << 1) | b0);
+        *pmode = (int)mode;
+#else
         /* 네 모드: 앞 블록의 모드를 문맥으로 두 비트. */
         int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
         int hi = ingot_rc_dec_bit(r, &probs[mo + 0]);
         int lo = ingot_rc_dec_bit(r, &probs[mo + 1 + hi]);
         mode = (uint32_t)((hi << 1) | lo);
         *pmode = (int)mode;
+#endif
     }
     if (r->error) return 1;
 

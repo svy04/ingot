@@ -58,10 +58,49 @@ static int effective_mode(const ingot_neighbors *nb, int mode)
 {
     if (mode == INGOT_PRED_V && !nb->has_top) return INGOT_PRED_DC;
     if (mode == INGOT_PRED_H && !nb->has_left) return INGOT_PRED_DC;
+#if INGOT_MODES8
+    /* D45 는 위 행만 보므로 위가 있으면 쓸 수 있다. 나머지 각도는 모서리를
+     * 지나므로 양쪽이 다 있어야 한다. */
+    if (mode == INGOT_PRED_D45)
+        return nb->has_top ? mode : INGOT_PRED_DC;
+#endif
     if (mode >= INGOT_PRED_PLANE && !(nb->has_top && nb->has_left))
         return INGOT_PRED_DC;
     return mode;
 }
+
+#if INGOT_MODES8
+/* 각도 예측. dx 는 위 행을 훑는 1/32 화소 기울기다. 화소 (y,x) 에서 그
+ * 방향으로 거슬러 올라가 참조에 닿는 자리를 두 이웃으로 보간한다.
+ *
+ * dx 가 양수면 위 행 오른쪽으로 뻗어 위 행만 본다. 음수면 왼쪽으로 뻗어,
+ * 위 행을 벗어나는 화소는 같은 직선이 왼쪽 열과 만나는 자리를 본다.
+ * inv 는 그 역기울기로, dx 와 짝을 이뤄 미리 넘긴다 -- 나눗셈을 화소마다
+ * 하지 않으려는 것이고, 규격에 박히는 값이므로 표로 고정한다. */
+static void pred_angle(const ingot_neighbors *nb, int dx, int inv, int16_t *pred)
+{
+    int n = nb->n, y, x;
+    for (y = 0; y < n; y++) {
+        for (x = 0; x < n; x++) {
+            int idx = (x << 5) + (y + 1) * dx;
+            int b, f, p0, p1, v;
+            if (idx >= 0) {
+                b = idx >> 5; f = idx & 31;
+                p0 = nb->top[b < n ? b : n - 1];
+                p1 = nb->top[(b + 1) < n ? (b + 1) : n - 1];
+            } else {
+                int idy = (y << 5) + (x + 1) * inv;
+                b = idy >> 5; f = idy & 31;
+                if (b < 0) { b = 0; f = 0; }
+                p0 = nb->left[b < n ? b : n - 1];
+                p1 = nb->left[(b + 1) < n ? (b + 1) : n - 1];
+            }
+            v = (p0 * (32 - f) + p1 * f + 16) >> 5;
+            pred[y * n + x] = (int16_t)ingot_clamp_u8(v);
+        }
+    }
+}
+#endif
 
 
 #if INGOT_REFFILT
@@ -84,7 +123,14 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
 #if INGOT_REFFILT
     ingot_neighbors nbf;
     const ingot_neighbors *nb = nb_in;
-    if (nb_in->n >= INGOT_REFFILT_MIN) {
+#if INGOT_MODES8 && INGOT_REFFILT_ANGLE == 0
+    /* 각도 예측은 이웃을 비스듬히 훑으며 이미 두 화소를 섞는다. 거기에
+     * 평활화를 또 걸면 결이 두 번 뭉개진다. */
+    int skip_f = (mode >= INGOT_PRED_D45);
+#else
+    int skip_f = 0;
+#endif
+    if (!skip_f && nb_in->n >= INGOT_REFFILT_MIN) {
         nbf = *nb_in;
         if (nbf.has_top)
             ref_smooth(nbf.top, nbf.n, nbf.topleft, nbf.has_topleft);
@@ -99,6 +145,13 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
 
     mode = effective_mode(nb, mode);
 
+
+#if INGOT_MODES8
+    if (mode == INGOT_PRED_D45)  { pred_angle(nb,  32,   0, pred); return; }
+    if (mode == INGOT_PRED_D135) { pred_angle(nb, -32,  32, pred); return; }
+    if (mode == INGOT_PRED_D113) { pred_angle(nb, -16,  64, pred); return; }
+    if (mode == INGOT_PRED_D157) { pred_angle(nb, -64,  16, pred); return; }
+#endif
 
     if (mode == INGOT_PRED_DC) {
         int sum = 0, cnt = 0, dc;

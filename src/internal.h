@@ -160,6 +160,27 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #define INGOT_PRED_H      2
 #define INGOT_PRED_PLANE  3
 
+/* 방향 예측 넷을 더해 여덟 모드로 갈지. 규격이 바뀐다.
+ *
+ * 방향 예측은 2026-08-21~22 에 여섯 번 재서 여섯 번 다 졌다. 그때 적은
+ * 까닭은 「모드 기호가 이득보다 비싸다」였는데, **그 시점의 인코더는 모드
+ * 기호의 값을 후보마다 매기지 않고 넷 모두에 같은 상수를 더하고 있었다.**
+ * 그것을 고친 것이 v1.7 이고, 고친 뒤로 이 축을 다시 안 걸었다.
+ *
+ * 각도는 모두 위-왼쪽 모서리를 지나거나 위 행 안에서 끝나는 것으로 골랐다.
+ * 우리 이웃은 위 n 개와 왼쪽 n 개뿐이라, 위 행 오른쪽으로 뻗는 각도는
+ * 마지막 값을 되풀이하게 된다. */
+#ifndef INGOT_MODES8
+#define INGOT_MODES8 0
+#endif
+
+#if INGOT_MODES8
+#define INGOT_PRED_D45    4   /* 왼쪽 아래로 45도. 위 행만 본다 */
+#define INGOT_PRED_D135   5   /* 오른쪽 아래로 45도. 모서리를 지난다 */
+#define INGOT_PRED_D113   6   /* 위 행 쪽으로 더 가파르게 */
+#define INGOT_PRED_D157   7   /* 왼쪽 열 쪽으로 더 눕게 */
+#endif
+
 /* 네 번째 모드를 평면 대신 「매끄러운 보간」으로 바꿀지. 규격이 바뀌지만
  * **비트 대가가 0 이다** -- 모드 수가 그대로라 기호도 그대로다.
  *
@@ -209,6 +230,18 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #define INGOT_REFFILT_MIN 8
 #endif
 
+/* 각도 예측에도 평활화를 걸지. 각도 예측은 이웃을 비스듬히 훑으며 이미 두
+ * 화소를 섞으므로, 또 고르면 결이 두 번 뭉개질 수 있다. */
+#ifndef INGOT_REFFILT_ANGLE
+#define INGOT_REFFILT_ANGLE 1
+#endif
+
+/* 인코더가 D45 를 후보에서 뺄지. 규격은 안 바뀐다 -- 디코더는 그 모드를
+ * 그대로 읽을 수 있고, 안 쓰이면 그 기호의 확률이 0 쪽으로 수렴한다. */
+#ifndef INGOT_NO_D45
+#define INGOT_NO_D45 0
+#endif
+
 /* 색차의 넷째 모드를 「휘도에서 끌어오기」로 바꿀지. 규격이 바뀌지만
  * **비트 대가가 0** 이다 -- 모드 수가 그대로이고 기울기도 안 신호한다.
  *
@@ -226,7 +259,11 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #ifndef INGOT_CFL
 #define INGOT_CFL 0
 #endif
+#if INGOT_MODES8
+#define INGOT_PRED_COUNT  8
+#else
 #define INGOT_PRED_COUNT  4
+#endif
 
 /* ---- 예측 모드 -> 변환 종류 ----
  * 예측이 시작된 가장자리에서 멀어지는 방향에 ADST 를 쓴다. 세로 예측이면
@@ -254,13 +291,28 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #define INGOT_ADST 0
 #endif
 
-/* 아래 한 비트가 세로, 둘째 비트가 가로에 사인 변환을 쓴다는 뜻이다. */
+/* 아래 한 비트가 세로, 둘째 비트가 가로에 사인 변환을 쓴다는 뜻이다.
+ *
+ * 잔차가 어느 방향으로 커지는지에 맞춘다. 위에서 내려오는 예측은 세로로,
+ * 왼쪽에서 오는 예측은 가로로 잔차가 커진다. 대각선은 양쪽 다다. */
 static inline int ingot_tx_of_mode(int mode)
 {
 #if INGOT_ADST
+#if INGOT_MODES8
+    switch (mode) {
+    case INGOT_PRED_V:     return 1;
+    case INGOT_PRED_H:     return 2;
+    case INGOT_PRED_PLANE: return 3;
+    case INGOT_PRED_D135:  return 3;
+    case INGOT_PRED_D113:  return 1;
+    case INGOT_PRED_D157:  return 2;
+    default:               return 0;   /* DC, D45 */
+    }
+#else
     if (mode == INGOT_PRED_V) return 1;
     if (mode == INGOT_PRED_H) return 2;
     return 0;
+#endif
 #else
     (void)mode;
     return 0;
@@ -730,9 +782,33 @@ static inline int ingot_abs_i(int v) { return v < 0 ? -v : v; }
 #define INGOT_NB5 1
 #endif
 
+/* 이웃 합에 무게를 줄지. 바로 옆 두 칸이 두 칸 건너보다 더 잘 맞히는데
+ * 지금은 똑같이 센다. 무게를 주면 무리 수가 그대로라 표본이 안 갈린다 --
+ * 문맥을 늘리는 판은 이 프로젝트에서 네 번 다 졌고(빈 블록 문맥, 이웃
+ * 아홉 단계, 깃발 일곱, 문맥 크기 구분), 정보를 더 본 판은 이겼다. */
+#ifndef INGOT_NBW
+#define INGOT_NBW 0
+#endif
+
 static inline int ingot_nb2d(const int16_t *lvl, int idx, int n)
 {
     int u = idx % n, v = idx / n, s = 0;
+#if INGOT_NBW
+    /* 바로 옆 둘에 2, 대각선과 두 칸 건너에 1. 합을 2 로 나눠 눈금을
+     * 예전과 맞춘다 -- 단계 경계를 그대로 쓰려는 것이다. */
+    if (u > 0)            s += 2 * (lvl[idx - 1] < 0 ? -lvl[idx - 1] : lvl[idx - 1]);
+    if (v > 0)            s += 2 * (lvl[idx - n] < 0 ? -lvl[idx - n] : lvl[idx - n]);
+    if (u > 0 && v > 0)   s += lvl[idx - n - 1] < 0 ? -lvl[idx - n - 1]
+                                                    : lvl[idx - n - 1];
+    if (u > 1)            s += lvl[idx - 2] < 0 ? -lvl[idx - 2] : lvl[idx - 2];
+    if (v > 1)            s += lvl[idx - 2 * n] < 0 ? -lvl[idx - 2 * n]
+                                                    : lvl[idx - 2 * n];
+    if (u > 1 && v > 0)   s += lvl[idx - n - 2] < 0 ? -lvl[idx - n - 2]
+                                                    : lvl[idx - n - 2];
+    if (u > 0 && v > 1)   s += lvl[idx - 2 * n - 1] < 0 ? -lvl[idx - 2 * n - 1]
+                                                        : lvl[idx - 2 * n - 1];
+    return (s + 1) >> 1;
+#else
     if (u > 0)            s += lvl[idx - 1] < 0 ? -lvl[idx - 1] : lvl[idx - 1];
     if (v > 0)            s += lvl[idx - n] < 0 ? -lvl[idx - n] : lvl[idx - n];
     if (u > 0 && v > 0)   s += lvl[idx - n - 1] < 0 ? -lvl[idx - n - 1]
@@ -743,6 +819,7 @@ static inline int ingot_nb2d(const int16_t *lvl, int idx, int n)
                                                     : lvl[idx - 2 * n];
 #endif
     return s;
+#endif
 }
 
 static inline int ingot_ctx_level(int nb)
@@ -998,7 +1075,12 @@ int ingot_restore_pick(const uint8_t *orig, const uint8_t *dec, int w, int h,
 void ingot_loopfilter(uint8_t *pl, int pw, int ox, int oy, int gw, int gh,
                       const uint8_t *map, int ms, int base, int chroma);
 
+#if INGOT_MODES8
+/* 앞 블록 모드 여덟 가지마다 세 비트 트리 일곱 칸 */
+#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 56)
+#else
 #define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 12)
+#endif
 
 #ifdef INGOT_BIT_STATS
 /* 비트를 갈래별로 세는 장치. 진단용이라 평소 빌드에는 없다. */

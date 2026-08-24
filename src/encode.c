@@ -317,6 +317,18 @@ static int64_t block_distortion_n(const int16_t *a, const int16_t *b,
 /* 네 모드: 2비트 트리. 문맥은 앞 블록의 모드다. */
 static int64_t mode_price(const uint16_t *probs, int pmode, int mode, int n)
 {
+#if INGOT_MODES8
+    /* 세 비트 트리. 앞 블록 모드 여덟 가지마다 일곱 칸을 쓴다:
+     * 0 번이 첫 비트, 1~2 번이 둘째, 3~6 번이 셋째다. */
+    int mo = INGOT_PROB_MODE + (pmode & 7) * 7;
+    int b2 = (mode >> 2) & 1, b1 = (mode >> 1) & 1;
+    int64_t c;
+    (void)n;
+    c  = (int64_t)ingot_rc_price(probs[mo + 0], b2);
+    c += (int64_t)ingot_rc_price(probs[mo + 1 + b2], b1);
+    c += (int64_t)ingot_rc_price(probs[mo + 3 + b2 * 2 + b1], mode & 1);
+    return c;
+#else
     int mo = INGOT_PROB_MODE + (pmode & 3) * 3;
     int hi = (mode >> 1) & 1;
     int64_t c;
@@ -324,15 +336,25 @@ static int64_t mode_price(const uint16_t *probs, int pmode, int mode, int n)
     c  = (int64_t)ingot_rc_price(probs[mo + 0], hi);
     c += (int64_t)ingot_rc_price(probs[mo + 1 + hi], mode & 1);
     return c;
+#endif
 }
 
 
 static void mode_write(ingot_rc_enc *w, uint16_t *probs, int pmode, int mode, int n)
 {
+#if INGOT_MODES8
+    int mo = INGOT_PROB_MODE + (pmode & 7) * 7;
+    int b2 = (mode >> 2) & 1, b1 = (mode >> 1) & 1;
+    (void)n;
+    ingot_rc_enc_bit(w, &probs[mo + 0], b2);
+    ingot_rc_enc_bit(w, &probs[mo + 1 + b2], b1);
+    ingot_rc_enc_bit(w, &probs[mo + 3 + b2 * 2 + b1], mode & 1);
+#else
     int mo = INGOT_PROB_MODE + (pmode & 3) * 3, hi = (mode >> 1) & 1;
     (void)n;
     ingot_rc_enc_bit(w, &probs[mo + 0], hi);
     ingot_rc_enc_bit(w, &probs[mo + 1 + hi], mode & 1);
+#endif
 }
 
 /* 블록 하나를 네 모드로 시험해 가장 싼 것을 고르고 쓴다.
@@ -399,6 +421,16 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     /* 1단계: 잔차의 절대합으로 후보 순위를 매긴다. 담아 보지 않으므로 싸다. */
     for (m = 0; m < INGOT_PRED_COUNT; m++) {
         int64_t sad = 0;
+#if INGOT_MODES8 && INGOT_NO_D45
+        /* D45 는 위 행 오른쪽으로 뻗는데 우리 이웃은 위 n 개뿐이라, 오른쪽
+         * 절반이 마지막 화소의 되풀이가 된다. 그 되풀이가 계단 결을 만든다.
+         * 규격에는 남겨 두고 인코더만 안 고른다 -- 디코더는 안 바뀐다. */
+        if (m == INGOT_PRED_D45) {
+            rough[m] = (int64_t)1 << 60;
+            order[m] = m;          /* 정렬이 이 자리도 읽는다 */
+            continue;
+        }
+#endif
         ingot_predict(&nb, m, pred);
         for (k = 0; k < total; k++) {
             int d = (int)src[k] - (int)pred[k];
