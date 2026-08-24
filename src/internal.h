@@ -181,6 +181,17 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #define INGOT_MODES16 1
 #endif
 
+/* 각도를 스물여덟으로 늘려 서른두 모드로 갈지. 열여섯이 이긴 뒤에 건다. */
+#ifndef INGOT_MODES32
+#define INGOT_MODES32 0
+#endif
+
+#if INGOT_MODES32 && !defined(INGOT_MODES16_FORCED)
+#undef INGOT_MODES16
+#define INGOT_MODES16 1
+#define INGOT_MODES16_FORCED 1
+#endif
+
 #if INGOT_MODES16 && !defined(INGOT_MODES8_FORCED)
 #undef INGOT_MODES8
 #define INGOT_MODES8 1
@@ -203,7 +214,17 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
  * 양수면 위 행만, 음수면 모서리를 지나 왼쪽 열까지 본다. 역기울기는
  * 1024/|기울기| 로, 화소마다 나눗셈을 하지 않으려고 미리 넣는다.
  * **규격에 박히는 값이다.** */
-#if INGOT_MODES16
+#if INGOT_MODES32
+#define INGOT_ANGLE_N 28
+static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
+    { 128,   0 }, {  96,   0 }, {  80,   0 }, {  64,   0 }, {  48,   0 },
+    {  40,   0 }, {  32,   0 }, {  24,   0 }, {  16,   0 }, {   8,   0 },
+    {  -4, 256 }, {  -8, 128 }, { -12,  85 }, { -16,  64 }, { -20,  51 },
+    { -24,  43 }, { -28,  37 }, { -32,  32 }, { -40,  26 }, { -48,  21 },
+    { -56,  18 }, { -64,  16 }, { -80,  13 }, { -96,  11 }, { -112,  9 },
+    { -128,  8 }, { -160,  6 }, { -192,  5 }
+};
+#elif INGOT_MODES16
 #define INGOT_ANGLE_N 12
 static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
     {  64,   0 }, {  32,   0 }, {  16,   0 },
@@ -295,7 +316,9 @@ static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
 #ifndef INGOT_CFL
 #define INGOT_CFL 0
 #endif
-#if INGOT_MODES16
+#if INGOT_MODES32
+#define INGOT_PRED_COUNT  32
+#elif INGOT_MODES16
 #define INGOT_PRED_COUNT  16
 #elif INGOT_MODES8
 #define INGOT_PRED_COUNT  8
@@ -1127,7 +1150,10 @@ int ingot_restore_pick(const uint8_t *orig, const uint8_t *dec, int w, int h,
 void ingot_loopfilter(uint8_t *pl, int pw, int ox, int oy, int gw, int gh,
                       const uint8_t *map, int ms, int base, int chroma);
 
-#if INGOT_MODES16
+#if INGOT_MODES32
+/* 앞 블록 모드 서른둘마다 다섯 비트 트리 서른한 칸 */
+#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 992)
+#elif INGOT_MODES16
 /* 앞 블록 모드 열여섯 가지마다 네 비트 트리 열다섯 칸 */
 #define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 240)
 #elif INGOT_MODES8
