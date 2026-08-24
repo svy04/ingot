@@ -317,7 +317,19 @@ static int64_t block_distortion_n(const int16_t *a, const int16_t *b,
 /* 네 모드: 2비트 트리. 문맥은 앞 블록의 모드다. */
 static int64_t mode_price(const uint16_t *probs, int pmode, int mode, int n)
 {
-#if INGOT_MODES8
+#if INGOT_MODES16
+    /* 네 비트 트리. 앞 블록 모드 열여섯 가지마다 열다섯 칸이다:
+     * 0 번이 첫 비트, 1~2 번이 둘째, 3~6 번이 셋째, 7~14 번이 넷째다. */
+    int mo = INGOT_PROB_MODE + (pmode & 15) * 15;
+    int b3 = (mode >> 3) & 1, b2 = (mode >> 2) & 1, b1 = (mode >> 1) & 1;
+    int64_t c;
+    (void)n;
+    c  = (int64_t)ingot_rc_price(probs[mo + 0], b3);
+    c += (int64_t)ingot_rc_price(probs[mo + 1 + b3], b2);
+    c += (int64_t)ingot_rc_price(probs[mo + 3 + b3 * 2 + b2], b1);
+    c += (int64_t)ingot_rc_price(probs[mo + 7 + b3 * 4 + b2 * 2 + b1], mode & 1);
+    return c;
+#elif INGOT_MODES8
     /* 세 비트 트리. 앞 블록 모드 여덟 가지마다 일곱 칸을 쓴다:
      * 0 번이 첫 비트, 1~2 번이 둘째, 3~6 번이 셋째다. */
     int mo = INGOT_PROB_MODE + (pmode & 7) * 7;
@@ -342,7 +354,15 @@ static int64_t mode_price(const uint16_t *probs, int pmode, int mode, int n)
 
 static void mode_write(ingot_rc_enc *w, uint16_t *probs, int pmode, int mode, int n)
 {
-#if INGOT_MODES8
+#if INGOT_MODES16
+    int mo = INGOT_PROB_MODE + (pmode & 15) * 15;
+    int b3 = (mode >> 3) & 1, b2 = (mode >> 2) & 1, b1 = (mode >> 1) & 1;
+    (void)n;
+    ingot_rc_enc_bit(w, &probs[mo + 0], b3);
+    ingot_rc_enc_bit(w, &probs[mo + 1 + b3], b2);
+    ingot_rc_enc_bit(w, &probs[mo + 3 + b3 * 2 + b2], b1);
+    ingot_rc_enc_bit(w, &probs[mo + 7 + b3 * 4 + b2 * 2 + b1], mode & 1);
+#elif INGOT_MODES8
     int mo = INGOT_PROB_MODE + (pmode & 7) * 7;
     int b2 = (mode >> 2) & 1, b1 = (mode >> 1) & 1;
     (void)n;

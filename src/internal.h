@@ -174,11 +174,47 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #define INGOT_MODES8 1
 #endif
 
+/* 각도를 열둘로 늘려 열여섯 모드로 갈지. 여덟 모드가 조각 1024 에서 이긴
+ * 뒤에 건다 -- 조각이 크면 기호를 늘릴 여유가 있다는 것을 그때 봤다.
+ * 켜면 INGOT_MODES8 도 함께 켜진 것으로 친다. */
+#ifndef INGOT_MODES16
+#define INGOT_MODES16 1
+#endif
+
+#if INGOT_MODES16 && !defined(INGOT_MODES8_FORCED)
+#undef INGOT_MODES8
+#define INGOT_MODES8 1
+#define INGOT_MODES8_FORCED 1
+#endif
+
 #if INGOT_MODES8
 #define INGOT_PRED_D45    4   /* 왼쪽 아래로 45도. 위 행만 본다 */
 #define INGOT_PRED_D135   5   /* 오른쪽 아래로 45도. 모서리를 지난다 */
 #define INGOT_PRED_D113   6   /* 위 행 쪽으로 더 가파르게 */
 #define INGOT_PRED_D157   7   /* 왼쪽 열 쪽으로 더 눕게 */
+#endif
+
+#if INGOT_MODES16
+#define INGOT_PRED_A8     8
+#define INGOT_PRED_A15   15
+#endif
+
+/* 각도 모드마다 (기울기, 역기울기). 기울기는 위 행을 훑는 1/32 화소 값이고,
+ * 양수면 위 행만, 음수면 모서리를 지나 왼쪽 열까지 본다. 역기울기는
+ * 1024/|기울기| 로, 화소마다 나눗셈을 하지 않으려고 미리 넣는다.
+ * **규격에 박히는 값이다.** */
+#if INGOT_MODES16
+#define INGOT_ANGLE_N 12
+static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
+    {  64,   0 }, {  32,   0 }, {  16,   0 },
+    {  -8, 128 }, { -16,  64 }, { -24,  43 }, { -32,  32 },
+    { -48,  21 }, { -64,  16 }, { -96,  11 }, { -128,  8 }, { -192, 5 }
+};
+#elif INGOT_MODES8
+#define INGOT_ANGLE_N 4
+static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
+    { 32, 0 }, { -32, 32 }, { -16, 64 }, { -64, 16 }
+};
 #endif
 
 /* 네 번째 모드를 평면 대신 「매끄러운 보간」으로 바꿀지. 규격이 바뀌지만
@@ -259,7 +295,9 @@ void ingot_idct(const int16_t *src, int16_t *dst, int dst_stride, int n, int tx)
 #ifndef INGOT_CFL
 #define INGOT_CFL 0
 #endif
-#if INGOT_MODES8
+#if INGOT_MODES16
+#define INGOT_PRED_COUNT  16
+#elif INGOT_MODES8
 #define INGOT_PRED_COUNT  8
 #else
 #define INGOT_PRED_COUNT  4
@@ -424,7 +462,7 @@ static inline int ingot_tx_gain256(int n)
 #endif
 
 #ifndef INGOT_MODE_TRIALS
-#define INGOT_MODE_TRIALS 8
+#define INGOT_MODE_TRIALS 16
 #endif
 
 /* 통째로 담는 값이 이 비트 수보다 싸면 나누는 쪽을 아예 재지 않는다.
@@ -1089,7 +1127,10 @@ int ingot_restore_pick(const uint8_t *orig, const uint8_t *dec, int w, int h,
 void ingot_loopfilter(uint8_t *pl, int pw, int ox, int oy, int gw, int gh,
                       const uint8_t *map, int ms, int base, int chroma);
 
-#if INGOT_MODES8
+#if INGOT_MODES16
+/* 앞 블록 모드 열여섯 가지마다 네 비트 트리 열다섯 칸 */
+#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 240)
+#elif INGOT_MODES8
 /* 앞 블록 모드 여덟 가지마다 세 비트 트리 일곱 칸 */
 #define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 56)
 #else

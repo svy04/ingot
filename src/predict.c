@@ -59,10 +59,15 @@ static int effective_mode(const ingot_neighbors *nb, int mode)
     if (mode == INGOT_PRED_V && !nb->has_top) return INGOT_PRED_DC;
     if (mode == INGOT_PRED_H && !nb->has_left) return INGOT_PRED_DC;
 #if INGOT_MODES8
-    /* D45 는 위 행만 보므로 위가 있으면 쓸 수 있다. 나머지 각도는 모서리를
-     * 지나므로 양쪽이 다 있어야 한다. */
-    if (mode == INGOT_PRED_D45)
-        return nb->has_top ? mode : INGOT_PRED_DC;
+    /* 기울기가 양수인 각도는 위 행만 보므로 위가 있으면 쓸 수 있다.
+     * 음수인 각도는 모서리를 지나므로 양쪽이 다 있어야 한다. */
+    if (mode >= INGOT_PRED_D45) {
+        int a = mode - INGOT_PRED_D45;
+        if (a >= INGOT_ANGLE_N) a = INGOT_ANGLE_N - 1;
+        if (ingot_angle_tab[a][0] > 0)
+            return nb->has_top ? mode : INGOT_PRED_DC;
+        return (nb->has_top && nb->has_left) ? mode : INGOT_PRED_DC;
+    }
 #endif
     if (mode >= INGOT_PRED_PLANE && !(nb->has_top && nb->has_left))
         return INGOT_PRED_DC;
@@ -147,10 +152,12 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
 
 
 #if INGOT_MODES8
-    if (mode == INGOT_PRED_D45)  { pred_angle(nb,  32,   0, pred); return; }
-    if (mode == INGOT_PRED_D135) { pred_angle(nb, -32,  32, pred); return; }
-    if (mode == INGOT_PRED_D113) { pred_angle(nb, -16,  64, pred); return; }
-    if (mode == INGOT_PRED_D157) { pred_angle(nb, -64,  16, pred); return; }
+    if (mode >= INGOT_PRED_D45) {
+        int a = mode - INGOT_PRED_D45;
+        if (a >= INGOT_ANGLE_N) a = INGOT_ANGLE_N - 1;
+        pred_angle(nb, ingot_angle_tab[a][0], ingot_angle_tab[a][1], pred);
+        return;
+    }
 #endif
 
     if (mode == INGOT_PRED_DC) {
