@@ -360,15 +360,22 @@ static inline int ingot_tx_of_mode(int mode)
 {
 #if INGOT_ADST
 #if INGOT_MODES8
-    switch (mode) {
-    case INGOT_PRED_V:     return 1;
-    case INGOT_PRED_H:     return 2;
-    case INGOT_PRED_PLANE: return 3;
-    case INGOT_PRED_D135:  return 3;
-    case INGOT_PRED_D113:  return 1;
-    case INGOT_PRED_D157:  return 2;
-    default:               return 0;   /* DC, D45 */
+    if (mode == INGOT_PRED_V) return 1;
+    if (mode == INGOT_PRED_H) return 2;
+    if (mode == INGOT_PRED_PLANE) return 3;
+    if (mode >= INGOT_PRED_D45) {
+        /* 각도마다 잔차가 커지는 방향이 다르다. 기울기가 양수면 위 행만
+         * 보므로 세로로 멀어지고, 음수면서 완만하면(|기울기| 가 크면)
+         * 왼쪽 열 쪽이라 가로로 멀어진다. 그 사이는 양쪽이다. */
+        int a = mode - INGOT_PRED_D45;
+        int dx;
+        if (a >= INGOT_ANGLE_N) a = INGOT_ANGLE_N - 1;
+        dx = ingot_angle_tab[a][0];
+        if (dx > 0) return 1;            /* 위 행만 → 세로 */
+        if (dx <= -96) return 2;         /* 거의 가로 → 가로 */
+        return 3;                        /* 그 사이 → 양쪽 */
     }
+    return 0;                            /* DC */
 #else
     if (mode == INGOT_PRED_V) return 1;
     if (mode == INGOT_PRED_H) return 2;

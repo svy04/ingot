@@ -9,13 +9,13 @@
   <img src="https://img.shields.io/badge/deps-libc%20only-5d6e73" alt="Zero dependencies">
 </p>
 
-A lossy image codec built to win on **several axes at once** — not just compression ratio. This is **v1.9**.
+A lossy image codec built to win on **several axes at once** — not just compression ratio. This is **v1.10**.
 
 [한국어](README.ko.md)
 
 Most codecs trade one property for another. ingot picks the axes that were left empty because nobody optimized for them, and locks them into the format itself.
 
-- **Ahead of JPEG, WebP and JPEG XL on all three metrics** — against JPEG **−38.2%** (PSNR), **−39.9%** (SSIM), **−33.6%** (SSIMULACRA2) on standard photos; against WebP **−25.3%**, **−17.8%**, **−24.5%**; against JPEG XL **−21.6%**, **−9.4%**, **−1.6%**. Against AVIF we are ahead on the perceptual metric by **−6.5%** and behind on the two squared-error ones by **+22.5%** and **+16.3%**.
+- **Ahead of JPEG, WebP and JPEG XL on all three metrics** — against JPEG **−38.8%** (PSNR), **−40.4%** (SSIM), **−33.8%** (SSIMULACRA2) on standard photos; against WebP **−25.9%**, **−18.4%**, **−24.8%**; against JPEG XL **−22.3%**, **−9.9%**, **−2.1%**. Against AVIF we are ahead on the perceptual metric by **−7.5%** and behind on the two squared-error ones by **+20.6%** and **+14.4%**.
 - **Bit-exact** — integer math only, zero floating-point operations in the library. The same input always produces the same bytes.
 - **Thread count never enters the bitstream** — any number of threads, identical bytes out. The price is real and grows as groups shrink: against one group per image, **1.1%** at 512, **3.3%** at 256, **20.3%** at 64 (6 images, 6 quality steps, measured 2026-08-24 on the v1.8 encoder). The default is now 1024, which is where that measurement put its zero. Tiling in existing standards costs 3.7–8%. **The v1.9 encoder has not been re-measured on this axis** — it added four prediction modes, which changes what a small group has to learn.
 - **Small** — 5,364 lines of C99 in `src/`, of which 4,345 are on the decode path. Most of that is tables: the integer transform matrices up to 64×64 and a learned probability table. 620 lines sit behind knobs that are off — a second probability table, sine-transform matrices, and a restoration filter, kept because each is a measured near-miss. No dependencies beyond libc.
@@ -43,12 +43,12 @@ Input and output are PPM (P6, 8-bit) only. Convert other formats with ffmpeg.
 
 | vs | PSNR | SSIM | SSIMULACRA2 |
 |---|---|---|---|
-| JPEG | **−38.2%** | **−39.9%** | **−33.6%** |
-| WebP | **−25.3%** | **−17.8%** | **−24.5%** |
-| JPEG XL | **−21.6%** | **−9.4%** | **−1.6%** |
-| AVIF | +22.5% | +16.3% | **−6.5%** |
+| JPEG | **−38.8%** | **−40.4%** | **−33.8%** |
+| WebP | **−25.9%** | **−18.4%** | **−24.8%** |
+| JPEG XL | **−22.3%** | **−9.9%** | **−2.1%** |
+| AVIF | +20.6% | +14.4% | **−7.5%** |
 
-**AVIF is still ahead on both squared-error metrics, and the gap is 22.5%.** That is not a rounding difference — it is roughly what a mature encoder with dozens of directional prediction modes and a transform-type search buys. Measured per quality step, the gap is 1.11–1.25× at PSNR 30 and 1.3–1.96× at PSNR 40: we lose most at high quality, on flat images. The header — split flags, mode symbols, the last-coefficient position — is 13–16% of the file on those images and 4.6% on the ones where we do best.
+**AVIF is still ahead on both squared-error metrics, and the gap is 20.6%.** That is not a rounding difference — it is roughly what a mature encoder with dozens of directional prediction modes and a transform-type search buys. Measured per quality step, the gap is 1.11–1.25× at PSNR 30 and 1.3–1.96× at PSNR 40: we lose most at high quality, on flat images. The header — split flags, mode symbols, the last-coefficient position — is 13–16% of the file on those images and 4.6% on the ones where we do best.
 
 **The third column is why v1.1 exists.** Up to v1.0 this codec was tuned against squared error alone. Adding a perceptual metric showed that at the old setting it lost to *JPEG* on SSIMULACRA2 (+5.6%) while appearing to beat WebP and JPEG XL on PSNR. One spec constant — how much coarser high-frequency coefficients are quantized — moved it from +5.6% to **−11.3%** against JPEG, at the cost of 2.4 points of PSNR. v1.1 takes that trade.
 
@@ -136,6 +136,9 @@ Each change was added one at a time and kept only if it measured better. Reverte
 | Eleven coefficient bands instead of eight | **+0.26% (not taken)** | **+0.24% (not taken)** |
 | A separate starting probability table for high quality | **−0.05 to −0.16% at q1–q4, +0.14% at q10 (not taken)** | |
 | Seven magnitude flags instead of five | **(not taken)** | |
+| Sixteen prediction modes — twelve angles (v1.10) | **−1.00%** | **−0.69%** |
+| Thirty-two prediction modes — twenty-eight angles | **−0.32% (not taken; encode time doubles again)** | −0.09% |
+| Trial-encoding only the top 12 of 16 modes | **+0.18% (not taken)** | **+0.27% (not taken)** |
 
 **Three of those reverts were wrong, and finding out why is the most useful thing in this table.**
 
@@ -148,6 +151,8 @@ Tail truncation lost by **+4 percentage points** the first time. The technique w
 ADST was re-measured with a table generated from scratch and the probability model re-learned for it. It lands at **+0.09%** — close enough that the remaining gap is probably the zigzag order or the position-based quantization weight, both of which are still DCT-shaped. The table is in `src/adst.c` behind a knob that is off.
 
 More intra modes lost a seventh time, and then won. Four angles were added — 45°, 135°, and two between — with the mode symbol widened from a two-bit tree to three. At the default group size of 512 that was **−0.26% PSNR but +0.63% on the perceptual metric**, which would have closed the axis for the seventh time. Groups were then enlarged to 1024 for an unrelated reason, and the same code measured **−0.81% / −0.64% / −0.17%**. Probability tables restart at every group boundary; a three-bit mode tree has twice as much to learn, and at 512 there were not enough symbols in a group to learn it. **Whether a coding tool wins can depend on a parameter that has nothing to do with the tool.** That is now design rule 7.
+
+Twelve angles then beat four by another **−1.00% / −0.69% / −0.42%**, and twenty-eight angles beat twelve by only −0.32% while doubling encode time again. The axis that lost six times in a row is now the largest single source of gain in the format, and it has reached diminishing returns three doublings later.
 
 The full log, with the reason for each revert, is in [SPEC.md](SPEC.md).
 
