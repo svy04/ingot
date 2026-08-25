@@ -346,8 +346,23 @@ static int64_t block_distortion_n(const int16_t *a, const int16_t *b,
  * 담는 값을 재는 쪽과 실제로 쓰는 쪽이 한 문법을 보게 함수 둘로 묶어 둔다.
  * 둘이 어긋나면 인코더가 자기 값을 잘못 재고도 왕복은 통과해 안 잡힌다. */
 /* 네 모드: 2비트 트리. 문맥은 앞 블록의 모드다. */
-static int64_t mode_price(const uint16_t *probs, int pmode, int mode, int n)
+static int64_t mode_price(const uint16_t *probs, int pmode, int mode, int n,
+                          int plane)
 {
+#if INGOT_CHROMA_MODES4
+    /* 색차는 넷만 쓴다. 두 비트 트리이고 문맥 자리도 따로다. */
+    if (plane) {
+        int mo = INGOT_PROB_MODE_C + (pmode & 3) * 3;
+        int hi = (mode >> 1) & 1;
+        int64_t c;
+        (void)n;
+        c  = (int64_t)ingot_rc_price(probs[mo + 0], hi);
+        c += (int64_t)ingot_rc_price(probs[mo + 1 + hi], mode & 1);
+        return c;
+    }
+#else
+    (void)plane;
+#endif
 #if INGOT_MODES32
     /* 다섯 비트 트리. 앞 블록 모드 서른둘마다 서른한 칸이다. */
     int mo = INGOT_PROB_MODE + (pmode & 31) * 31;
@@ -397,8 +412,21 @@ static int64_t mode_price(const uint16_t *probs, int pmode, int mode, int n)
 }
 
 
-static void mode_write(ingot_rc_enc *w, uint16_t *probs, int pmode, int mode, int n)
+static void mode_write(ingot_rc_enc *w, uint16_t *probs, int pmode, int mode,
+                       int n, int plane)
 {
+#if INGOT_CHROMA_MODES4
+    if (plane) {
+        int mo = INGOT_PROB_MODE_C + (pmode & 3) * 3;
+        int hi = (mode >> 1) & 1;
+        (void)n;
+        ingot_rc_enc_bit(w, &probs[mo + 0], hi);
+        ingot_rc_enc_bit(w, &probs[mo + 1 + hi], mode & 1);
+        return;
+    }
+#else
+    (void)plane;
+#endif
 #if INGOT_MODES32
     int mo = INGOT_PROB_MODE + (pmode & 31) * 31;
     int b4 = (mode >> 4) & 1, b3 = (mode >> 3) & 1;
@@ -480,7 +508,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         ingot_bitplane = plane ? 1 : 0;
         ingot_bitcat = INGOT_BC_MODE;
 #endif
-        mode_write(w, probs, *pmode, best, n);
+        mode_write(w, probs, *pmode, best, n, plane);
 #ifdef INGOT_BIT_STATS
         ingot_bitcat = INGOT_BC_ZERO;
 #endif
@@ -497,6 +525,10 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     /* 1단계: 잔차의 절대합으로 후보 순위를 매긴다. 담아 보지 않으므로 싸다. */
     for (m = 0; m < INGOT_PRED_COUNT; m++) {
         int64_t sad = 0;
+#if INGOT_CHROMA_MODES4
+        /* 색차는 넷만 쓴다. 나머지는 후보에서 뺀다. */
+        if (plane && m >= 4) { rough[m] = (int64_t)1 << 60; order[m] = m; continue; }
+#endif
 #if INGOT_MODES8 && INGOT_NO_D45
         /* D45 는 위 행 오른쪽으로 뻗는데 우리 이웃은 위 n 개뿐이라, 오른쪽
          * 절반이 마지막 화소의 되풀이가 된다. 그 되풀이가 계단 결을 만든다.
@@ -525,6 +557,11 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     /* 2단계: 앞선 몇 개만 실제로 담아 보고 값과 비용으로 고른다. */
     tries = INGOT_MODE_TRIALS;
     if (tries > INGOT_PRED_COUNT) tries = INGOT_PRED_COUNT;
+#if INGOT_CHROMA_MODES4
+    /* 색차는 넷만 쓰므로 담아 보는 것도 넷까지다. 안 그러면 뺀 후보가
+     * 뒤로 밀렸을 뿐 여전히 시험돼 인코더가 넷 밖의 모드를 고른다. */
+    if (plane && tries > 4) tries = 4;
+#endif
     for (t = 0; t < tries; t++) {
         int64_t bits, dist, cost;
         m = order[t];
@@ -542,7 +579,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
          * 이미 그쪽으로 기울어 있어 싸고, 드문 모드는 비싸다. 이것을 고른 뒤
          * 상수로 더하면 후보 사이의 차이가 통째로 사라져, 모드 선택이 왜곡만
          * 보고 결정된다 (2026-08-22). */
-        bits += mode_price(probs, *pmode, m, n);
+        bits += mode_price(probs, *pmode, m, n, plane);
         dist = block_distortion_n(src, out, total, n, bx, by);
         cost = dist * INGOT_RD_SCALE + lambda * bits;
 
@@ -562,7 +599,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         ingot_bitplane = plane ? 1 : 0;
         ingot_bitcat = INGOT_BC_MODE;
 #endif
-        mode_write(w, probs, *pmode, best, n);
+        mode_write(w, probs, *pmode, best, n, plane);
 #ifdef INGOT_BIT_STATS
         ingot_bitcat = INGOT_BC_ZERO;
 #endif

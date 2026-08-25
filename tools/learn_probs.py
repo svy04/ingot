@@ -40,8 +40,9 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-SRC = ("src/transform.c src/adst.c src/dct128.c src/probs_hi.c src/restore.c src/color.c src/predict.c src/loopfilter.c "
-       "src/rangecoder.c src/encode.c src/decode.c tools/cli.c")
+SRC = "src/*.c tools/cli.c"   # 파일이 늘 때마다 손으로 더하다가 세 번
+                              # 놓쳤다(adst.c, dct128.c, guided.c).
+                              # 통째로 잡는다
 BIN = os.path.join(ROOT, "ingot.exe" if os.name == "nt" else "ingot")
 DUMP = os.path.join(ROOT, "probs.txt")
 CDF_TOTAL = 1 << 15

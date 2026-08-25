@@ -196,6 +196,17 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
     (void)luma; (void)lstride;
 #endif
     {
+#if INGOT_CHROMA_MODES4
+        if (p) {
+            /* 색차는 넷만 쓴다. 두 비트 트리이고 문맥 자리도 따로다. */
+            int mo = INGOT_PROB_MODE_C + (*pmode & 3) * 3;
+            int hi = ingot_rc_dec_bit(r, &probs[mo + 0]);
+            int lo = ingot_rc_dec_bit(r, &probs[mo + 1 + hi]);
+            mode = (uint32_t)((hi << 1) | lo);
+            *pmode = (int)mode;
+        } else
+#endif
+        {
 #if INGOT_MODES32
         /* 서른두 모드: 앞 블록의 모드를 문맥으로 다섯 비트. */
         int mo = INGOT_PROB_MODE + (*pmode & 31) * 31;
@@ -232,6 +243,7 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
         mode = (uint32_t)((hi << 1) | lo);
         *pmode = (int)mode;
 #endif
+        }
     }
     if (r->error) return 1;
 

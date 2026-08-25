@@ -353,6 +353,16 @@ static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
 #ifndef INGOT_CFL_AT_DC
 #define INGOT_CFL_AT_DC 0
 #endif
+
+/* 색차의 모드 수를 넷으로 줄일지. 색차는 결이 부드러워 각도 예측이 잘 안
+ * 뽑히는데 모드 기호는 휘도와 같은 네 비트를 쓴다. 실측으로 색차 모드
+ * 기호가 파일의 4.0% 이고 휘도(3.1%)보다 비싸다 -- 색차는 평면이 둘이라
+ * 블록 수가 두 배이기 때문이다. 넷으로 줄이면 그 절반을 아낀다.
+ *
+ * 색차의 넷은 DC·세로·가로·(휘도에서 끌어오기)다. */
+#ifndef INGOT_CHROMA_MODES4
+#define INGOT_CHROMA_MODES4 0
+#endif
 #if INGOT_MODES32
 #define INGOT_PRED_COUNT  32
 #elif INGOT_MODES16
@@ -1283,17 +1293,35 @@ int ingot_restore_pick(const uint8_t *orig, const uint8_t *dec, int w, int h,
 void ingot_loopfilter(uint8_t *pl, int pw, int ox, int oy, int gw, int gh,
                       const uint8_t *map, int ms, int base, int chroma);
 
+/* 색차 전용 모드 무리. 앞 블록 모드 넷마다 두 비트 트리 세 칸이다. */
+#if INGOT_CHROMA_MODES4
+#define INGOT_PROB_MODE_C  (INGOT_PROB_MODE + INGOT_MODE_SLOTS)
+#define INGOT_MODE_EXTRA   12
+#else
+#define INGOT_MODE_EXTRA   0
+#endif
+
+#if INGOT_MODES32
+#define INGOT_MODE_SLOTS 992
+#elif INGOT_MODES16
+#define INGOT_MODE_SLOTS 240
+#elif INGOT_MODES8
+#define INGOT_MODE_SLOTS 56
+#else
+#define INGOT_MODE_SLOTS 12
+#endif
+
 #if INGOT_MODES32
 /* 앞 블록 모드 서른둘마다 다섯 비트 트리 서른한 칸 */
-#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 992)
+#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 992 + INGOT_MODE_EXTRA)
 #elif INGOT_MODES16
 /* 앞 블록 모드 열여섯 가지마다 네 비트 트리 열다섯 칸 */
-#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 240)
+#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 240 + INGOT_MODE_EXTRA)
 #elif INGOT_MODES8
 /* 앞 블록 모드 여덟 가지마다 세 비트 트리 일곱 칸 */
-#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 56)
+#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 56 + INGOT_MODE_EXTRA)
 #else
-#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 12)
+#define INGOT_PROB_COUNT   (INGOT_PROB_MODE + 12 + INGOT_MODE_EXTRA)
 #endif
 
 #ifdef INGOT_BIT_STATS
