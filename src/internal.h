@@ -910,10 +910,36 @@ static inline int ingot_qw_alpha(int base)
 #endif
 }
 
+/* 자리를 어떤 거리로 잴지. 지금은 대각선 거리(u+v)다. 사람 눈의 민감도는
+ * 방사 대칭에 가까우므로 sqrt(u*u+v*v) 가 더 맞을 수 있다. 대각선 거리는
+ * 같은 방사 거리의 자리들에 서로 다른 세기를 준다 -- (n-1, 0) 과
+ * (n/2, n/2) 가 그렇다. */
+#ifndef INGOT_QW_RADIAL
+#define INGOT_QW_RADIAL 0
+#endif
+
+/* 정수 제곱근. 자리 가중에만 쓰므로 작은 값이면 된다. */
+static inline int ingot_isqrt(int v)
+{
+    int r = 0, b = 1 << 14;
+    while (b > v) b >>= 2;
+    while (b) {
+        if (v >= r + b) { v -= r + b; r = (r >> 1) + b; }
+        else r >>= 1;
+        b >>= 2;
+    }
+    return r;
+}
+
 static inline int ingot_qstep_at(int base, int idx, int n, int plane)
 {
     int u = idx % n, v = idx / n;
-#if INGOT_QW_NORM
+#if INGOT_QW_RADIAL
+    /* 방사 거리. 대각선 거리와 눈금을 맞추려고 sqrt(2) 를 곱한다 --
+     * 대각선 끝(n-1, n-1) 에서 두 거리가 같아야 세기 손잡이를 그대로 쓴다. */
+    int rad = ingot_isqrt(u * u + v * v);
+    int pos = (rad * 23 / 16) * 16 / n;
+#elif INGOT_QW_NORM
     int pos = ((u + v) * 16) / n;
 #else
     int pos = u + v;
