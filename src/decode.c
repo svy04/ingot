@@ -184,11 +184,43 @@ static void store_block(uint8_t *plane, int pw, int ph,
     }
 }
 
+/* 조각 하나를 다 읽은 뒤 거는 필터 둘. 평면마다 같은 순서로 건다. */
+static void filter_group(uint8_t *plane, int pw, int ph, int ox, int oy,
+                         int gw, int gh, int base, int p,
+                         uint8_t *map, int ms, int lf)
+{
+    if (lf) ingot_loopfilter(plane, pw, ox, oy, gw, gh, map, ms, base, p ? 1 : 0);
+#if INGOT_DERINGE
+    /* 경계 필터 다음에 건다. 거르기 전 사본에서 읽어야 옆 화소가 이미
+     * 걸러진 값에 물들지 않는다. */
+    {
+        size_t n = (size_t)pw * (size_t)ph;
+        uint8_t *pre = (uint8_t *)malloc(n);
+        if (pre) {
+            memcpy(pre, plane, n);
+            ingot_deringe(plane, pre, pw, ph, ox, oy, gw, gh, base,
+                          p ? 1 : 0);
+            free(pre);
+        }
+    }
+#else
+    (void)ph; (void)base;
+#endif
+}
+
+/* 색차 둘째 평면의 자리. 나눔과 모드는 첫째 평면과 한 벌을 나눠 쓰고
+ * 계수만 따로 실려 온다. 휘도일 때는 NULL 이다. */
+typedef struct {
+    uint8_t *plane;
+    int pempty;
+} ingot_side_d;
+
 static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                       int bx, int by, int gx0, int gy0, int n,
                       int base, int p, uint16_t *probs, int *pmode,
                       uint8_t *map, int ms,
-                      const uint8_t *luma, int lstride, int *pempty)
+                      const uint8_t *luma, int lstride, int *pempty,
+                      ingot_side_d *sd)
 {
     int16_t pred[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
             back[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
@@ -196,6 +228,9 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
     ingot_neighbors nb;
     uint32_t mode;
     int total = n * n, k;
+#if !INGOT_JOINT_CHROMA
+    (void)sd;
+#endif
 
     ingot_gather_neighbors(plane, pw, ph, bx, by, gx0, gy0, n, &nb);
 #if INGOT_CFL
@@ -276,6 +311,24 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
         out[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
     store_block(plane, pw, ph, bx, by, n, out);
 
+#if INGOT_JOINT_CHROMA
+    if (sd) {
+        ingot_neighbors nb_b;
+        ingot_gather_neighbors(sd->plane, pw, ph, bx, by, gx0, gy0, n, &nb_b);
+#if INGOT_CFL
+        if (luma) { nb_b.luma = luma; nb_b.luma_stride = lstride; }
+#endif
+        ingot_predict(&nb_b, (int)mode, pred);
+        if (read_residual(r, base, n, 2, probs, back,
+                          ingot_tx_of_mode((int)mode), ingot_aq_mul(&nb_b),
+                          &sd->pempty))
+            return 1;
+        for (k = 0; k < total; k++)
+            out[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
+        store_block(sd->plane, pw, ph, bx, by, n, out);
+    }
+#endif
+
     /* 이 블록의 왼쪽·위 경계를 4x4 칸 지도에 찍는다. 조각 원점의 경계는
      * 안 찍으므로 필터가 조각을 넘지 않는다 — 조각 독립이 그대로 남는다. */
     {
@@ -293,24 +346,25 @@ static int read_quad(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                      int bx, int by, int gx0, int gy0, int n,
                      int base, int p, uint16_t *probs, int *pmode,
                      uint8_t *map, int ms,
-                     const uint8_t *luma, int lstride, int *pempty)
+                     const uint8_t *luma, int lstride, int *pempty,
+                     ingot_side_d *sd)
 {
     int i, h = n >> 1, sidx = INGOT_SPLIT_IDX(n);
 
     if (n <= INGOT_MIN_BLOCK)
         return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p,
-                          probs, pmode, map, ms, luma, lstride, pempty);
+                          probs, pmode, map, ms, luma, lstride, pempty, sd);
 
     if (!ingot_rc_dec_bit(r, &probs[INGOT_PROB_SPLIT + sidx])) {
         if (r->error) return 1;
         return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p,
-                          probs, pmode, map, ms, luma, lstride, pempty);
+                          probs, pmode, map, ms, luma, lstride, pempty, sd);
     }
     if (r->error) return 1;
     for (i = 0; i < 4; i++)
         if (read_quad(r, plane, pw, ph, bx + (i & 1) * h, by + (i >> 1) * h,
                       gx0, gy0, h, base, p, probs, pmode, map, ms,
-                      luma, lstride, pempty)) return 1;
+                      luma, lstride, pempty, sd)) return 1;
     return 0;
 }
 
@@ -326,7 +380,8 @@ static int read_plane_group(ingot_rc_dec *r, uint8_t *plane,
     for (my = 0; my < gh; my += INGOT_MAX_BLOCK)
         for (mx = 0; mx < gw; mx += INGOT_MAX_BLOCK)
             if (read_quad(r, plane, pw, ph, ox + mx, oy + my, ox, oy,
-                          INGOT_MAX_BLOCK, base, p, probs, &pmode, map, ms, luma, lstride, &pempty))
+                          INGOT_MAX_BLOCK, base, p, probs, &pmode, map, ms,
+                          luma, lstride, &pempty, NULL))
                 return 1;
     /* 색차가 볼 휘도는 **필터를 걸기 전** 값이어야 한다. 인코더는 자기
      * 복원 버퍼를 안 거르므로 필터 전 값을 보고 기울기를 뽑는다. 디코더가
@@ -338,23 +393,36 @@ static int read_plane_group(ingot_rc_dec *r, uint8_t *plane,
             memcpy(pre_out + (size_t)(oy + yy) * pw + ox,
                    plane + (size_t)(oy + yy) * pw + ox, (size_t)gw);
     }
-    if (lf) ingot_loopfilter(plane, pw, ox, oy, gw, gh, map, ms, base, p ? 1 : 0);
-#if INGOT_DERINGE
-    /* 경계 필터 다음에 건다. 거르기 전 사본에서 읽어야 옆 화소가 이미
-     * 걸러진 값에 물들지 않는다. */
-    {
-        size_t n = (size_t)pw * (size_t)ph;
-        uint8_t *pre = (uint8_t *)malloc(n);
-        if (pre) {
-            memcpy(pre, plane, n);
-            ingot_deringe(plane, pre, pw, ph, ox, oy, gw, gh, base,
-                          p ? 1 : 0);
-            free(pre);
-        }
-    }
-#endif
+    filter_group(plane, pw, ph, ox, oy, gw, gh, base, p, map, ms, lf);
     return 0;
 }
+
+#if INGOT_JOINT_CHROMA
+/* 색차 두 평면을 한 번의 순회로 읽는다. 나눔 트리와 예측 모드는 한 벌만
+ * 실려 있고, 그 자리에서 두 평면의 계수를 잇달아 읽는다. 나눔이 같으니
+ * 경계 지도도 하나면 된다. */
+static int read_chroma_group(ingot_rc_dec *r, uint8_t *p1, uint8_t *p2,
+                             const uint8_t *luma, int lstride, int pw, int ph,
+                             int ox, int oy, int gw, int gh,
+                             int base, uint16_t *probs,
+                             uint8_t *map, int ms, int lf)
+{
+    int my, mx, pmode = INGOT_PRED_DC, pempty = 0;
+    ingot_side_d sd;
+
+    sd.plane = p2; sd.pempty = 0;
+    memset(map, 0, (size_t)ms * ms);
+    for (my = 0; my < gh; my += INGOT_MAX_BLOCK)
+        for (mx = 0; mx < gw; mx += INGOT_MAX_BLOCK)
+            if (read_quad(r, p1, pw, ph, ox + mx, oy + my, ox, oy,
+                          INGOT_MAX_BLOCK, base, 1, probs, &pmode, map, ms,
+                          luma, lstride, &pempty, &sd))
+                return 1;
+    filter_group(p1, pw, ph, ox, oy, gw, gh, base, 1, map, ms, lf);
+    filter_group(p2, pw, ph, ox, oy, gw, gh, base, 2, map, ms, lf);
+    return 0;
+}
+#endif
 
 /* 절반 크기 평면을 원 크기로 늘린다. 최근접이다. */
 static void upsample(const uint8_t *src, int sw, int sh,
@@ -506,6 +574,18 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
                              qbase, 0, probs, lfmap, lfms, h.lf, lfpre)) {
             st = INGOT_ERR_BITSTREAM; goto done;
         }
+#if INGOT_JOINT_CHROMA
+        if (read_chroma_group(&r, plane[1], plane[2],
+#if INGOT_CFL
+                              h.sub ? NULL : (lfpre ? lfpre : plane[0]),
+#else
+                              h.sub ? NULL : plane[0],
+#endif
+                              h.width, h.cw, h.ch, cox, coy, cgw, cgh,
+                              qbase, probs, lfmap, lfms, h.lf)) {
+            st = INGOT_ERR_BITSTREAM; goto done;
+        }
+#else
         for (p = 1; p < 3; p++) {
             if (read_plane_group(&r, plane[p],
 #if INGOT_CFL
@@ -519,6 +599,7 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
                 st = INGOT_ERR_BITSTREAM; goto done;
             }
         }
+#endif
     }
 
     if (h.sub) {

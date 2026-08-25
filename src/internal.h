@@ -716,6 +716,23 @@ typedef struct {
 } ingot_plan;
 #endif
 
+/* 색차 두 평면을 한 번에 담을지.
+ *
+ * 지금은 U 와 V 가 완전히 따로다. 나눔 트리도 예측 모드도 두 번씩 담긴다.
+ * 비트 갈래를 재 보니 품질 4 에서 색차 비트의 43%가 곁정보였다 --
+ * 마지막 계수 자리 27,332 · 모드 15,757 · 나눔 7,462 비트다.
+ *
+ * 켜면 한 번만 담는다. 나눔과 모드는 **두 평면의 비용을 합쳐서** 고른다.
+ * 한쪽만 보고 골라 다른 쪽에 물려주면 예측이 나빠져 계수가 더 든다 --
+ * 2026-08-25 에 그 판을 재서 품질 4 에서 오히려 커지는 것을 봤다. */
+#ifndef INGOT_JOINT_CHROMA
+#define INGOT_JOINT_CHROMA 1
+#endif
+
+#if INGOT_JOINT_CHROMA && INGOT_IDTX
+#error "합동 색차와 항등 변환은 아직 같이 못 쓴다"
+#endif
+
 typedef struct {
     int n;                      /* 블록 한 변. 4 부터 INGOT_MAX_BLOCK 까지 */
     /* 위 행은 오른쪽으로 한 블록 더 잡아 둔다. 오른쪽 아래로 뻗는 각도가
