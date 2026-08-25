@@ -231,7 +231,7 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
                 sxy += (int64_t)lv * cv; cnt++;
             }
         }
-        if (cnt >= 2) {
+        if (cnt >= INGOT_CFL_MINN) {
             int64_t den = (int64_t)cnt * sxx - sx * sx;
             /* 기울기를 1/64 눈금 정수로 들고 다닌다. 분모가 0 이면
              * 이웃 휘도가 평평하다는 뜻이라 기울기를 0 으로 둔다. */
@@ -239,8 +239,8 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
             int64_t b;
             if (den != 0) {
                 a64 = (((int64_t)cnt * sxy - sx * sy) * 64) / den;
-                if (a64 >  256) a64 =  256;      /* 4.0 배로 묶는다 */
-                if (a64 < -256) a64 = -256;
+                if (a64 >  INGOT_CFL_ACLAMP) a64 =  INGOT_CFL_ACLAMP;
+                if (a64 < -INGOT_CFL_ACLAMP) a64 = -INGOT_CFL_ACLAMP;
             }
             b = (sy * 64 - a64 * sx) / cnt;
             for (y = 0; y < n; y++) {

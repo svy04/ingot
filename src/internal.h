@@ -354,6 +354,18 @@ static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
 #define INGOT_CFL_AT_DC 0
 #endif
 
+/* 색차 유도의 기울기를 얼마까지 허용할지. 1/64 눈금이다. 지금은 256
+ * (4.0 배)인데, 실제 휘도-색차 기울기는 대개 −1~+1 안이다. 넓게 열어 두면
+ * 이웃이 몇 개 안 될 때 뽑힌 이상치가 블록 전체를 망친다. */
+#ifndef INGOT_CFL_ACLAMP
+#define INGOT_CFL_ACLAMP 256
+#endif
+
+/* 기울기를 뽑는 데 필요한 이웃 최소 개수. 모자라면 안 쓴다. */
+#ifndef INGOT_CFL_MINN
+#define INGOT_CFL_MINN 2
+#endif
+
 /* 색차의 모드 수를 넷으로 줄일지. 색차는 결이 부드러워 각도 예측이 잘 안
  * 뽑히는데 모드 기호는 휘도와 같은 네 비트를 쓴다. 실측으로 색차 모드
  * 기호가 파일의 4.0% 이고 휘도(3.1%)보다 비싸다 -- 색차는 평면이 둘이라
