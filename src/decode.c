@@ -220,7 +220,7 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                       int base, int p, uint16_t *probs, int *pmode,
                       uint8_t *map, int ms,
                       const uint8_t *luma, int lstride, int *pempty,
-                      ingot_side_d *sd)
+                      ingot_side_d *sd, int forced)
 {
     int16_t pred[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
             back[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
@@ -238,7 +238,11 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
 #else
     (void)luma; (void)lstride;
 #endif
-    {
+    if (forced >= 0) {
+        /* 위 마디가 모드를 실어 왔다. 이 자리에는 안 실려 있다. */
+        mode = (uint32_t)forced;
+        *pmode = forced;
+    } else {
 #if INGOT_CHROMA_MODES4
         if (p) {
             /* 색차는 넷만 쓴다. 두 비트 트리이고 문맥 자리도 따로다. */
@@ -347,24 +351,66 @@ static int read_quad(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
                      int base, int p, uint16_t *probs, int *pmode,
                      uint8_t *map, int ms,
                      const uint8_t *luma, int lstride, int *pempty,
-                     ingot_side_d *sd)
+                     ingot_side_d *sd, int forced)
 {
     int i, h = n >> 1, sidx = INGOT_SPLIT_IDX(n);
 
     if (n <= INGOT_MIN_BLOCK)
         return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p,
-                          probs, pmode, map, ms, luma, lstride, pempty, sd);
+                          probs, pmode, map, ms, luma, lstride, pempty, sd,
+                          forced);
 
     if (!ingot_rc_dec_bit(r, &probs[INGOT_PROB_SPLIT + sidx])) {
         if (r->error) return 1;
         return read_block(r, plane, pw, ph, bx, by, gx0, gy0, n, base, p,
-                          probs, pmode, map, ms, luma, lstride, pempty, sd);
+                          probs, pmode, map, ms, luma, lstride, pempty, sd,
+                          forced);
     }
     if (r->error) return 1;
+#if INGOT_SHAREMODE
+    /* 나눴다. 이미 모드를 물려받은 마디가 아니면 공유 비트를 읽는다.
+     * 1 이면 그 자리에 모드가 하나 실려 있고 아래 넷이 그것을 쓴다. */
+    if (forced < 0 && n >= INGOT_SHARE_MIN
+        && ingot_rc_dec_bit(r, &probs[INGOT_PROB_SHARE + sidx])) {
+        if (r->error) return 1;
+        {
+#if INGOT_MODES32
+            int mo = INGOT_PROB_MODE + (*pmode & 31) * 31;
+            int b4 = ingot_rc_dec_bit(r, &probs[mo + 0]);
+            int b3 = ingot_rc_dec_bit(r, &probs[mo + 1 + b4]);
+            int b2 = ingot_rc_dec_bit(r, &probs[mo + 3 + b4 * 2 + b3]);
+            int b1 = ingot_rc_dec_bit(r, &probs[mo + 7 + b4 * 4 + b3 * 2 + b2]);
+            int b0 = ingot_rc_dec_bit(r,
+                         &probs[mo + 15 + b4 * 8 + b3 * 4 + b2 * 2 + b1]);
+            forced = (b4 << 4) | (b3 << 3) | (b2 << 2) | (b1 << 1) | b0;
+#elif INGOT_MODES16
+            int mo = INGOT_PROB_MODE + (*pmode & 15) * 15;
+            int b3 = ingot_rc_dec_bit(r, &probs[mo + 0]);
+            int b2 = ingot_rc_dec_bit(r, &probs[mo + 1 + b3]);
+            int b1 = ingot_rc_dec_bit(r, &probs[mo + 3 + b3 * 2 + b2]);
+            int b0 = ingot_rc_dec_bit(r, &probs[mo + 7 + b3 * 4 + b2 * 2 + b1]);
+            forced = (b3 << 3) | (b2 << 2) | (b1 << 1) | b0;
+#elif INGOT_MODES8
+            int mo = INGOT_PROB_MODE + (*pmode & 7) * 7;
+            int b2 = ingot_rc_dec_bit(r, &probs[mo + 0]);
+            int b1 = ingot_rc_dec_bit(r, &probs[mo + 1 + b2]);
+            int b0 = ingot_rc_dec_bit(r, &probs[mo + 3 + b2 * 2 + b1]);
+            forced = (b2 << 2) | (b1 << 1) | b0;
+#else
+            int mo = INGOT_PROB_MODE + (*pmode & 3) * 3;
+            int hi = ingot_rc_dec_bit(r, &probs[mo + 0]);
+            int lo = ingot_rc_dec_bit(r, &probs[mo + 1 + hi]);
+            forced = (hi << 1) | lo;
+#endif
+            *pmode = forced;
+        }
+    }
+    if (r->error) return 1;
+#endif
     for (i = 0; i < 4; i++)
         if (read_quad(r, plane, pw, ph, bx + (i & 1) * h, by + (i >> 1) * h,
                       gx0, gy0, h, base, p, probs, pmode, map, ms,
-                      luma, lstride, pempty, sd)) return 1;
+                      luma, lstride, pempty, sd, forced)) return 1;
     return 0;
 }
 
@@ -381,7 +427,7 @@ static int read_plane_group(ingot_rc_dec *r, uint8_t *plane,
         for (mx = 0; mx < gw; mx += INGOT_MAX_BLOCK)
             if (read_quad(r, plane, pw, ph, ox + mx, oy + my, ox, oy,
                           INGOT_MAX_BLOCK, base, p, probs, &pmode, map, ms,
-                          luma, lstride, &pempty, NULL))
+                          luma, lstride, &pempty, NULL, -1))
                 return 1;
     /* 색차가 볼 휘도는 **필터를 걸기 전** 값이어야 한다. 인코더는 자기
      * 복원 버퍼를 안 거르므로 필터 전 값을 보고 기울기를 뽑는다. 디코더가
@@ -416,7 +462,7 @@ static int read_chroma_group(ingot_rc_dec *r, uint8_t *p1, uint8_t *p2,
         for (mx = 0; mx < gw; mx += INGOT_MAX_BLOCK)
             if (read_quad(r, p1, pw, ph, ox + mx, oy + my, ox, oy,
                           INGOT_MAX_BLOCK, base, 1, probs, &pmode, map, ms,
-                          luma, lstride, &pempty, &sd))
+                          luma, lstride, &pempty, &sd, -1))
                 return 1;
     filter_group(p1, pw, ph, ox, oy, gw, gh, base, 1, map, ms, lf);
     filter_group(p2, pw, ph, ox, oy, gw, gh, base, 2, map, ms, lf);

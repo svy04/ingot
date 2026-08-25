@@ -1,5 +1,5 @@
 # ingot 골든 파일. 규격이 바뀌면 이 값이 바뀐다.
 # 바뀌었는데 의도한 게 아니면 그것이 회귀다.
-64x64 q20 g6 3228aa5fe2ebe1c2 236 dec:da5abbde14ad6815
-129x77 q5 g6 39b50f70da343602 7844 dec:e712f33de1cc0efd
-200x150 q40 g7 323e34266f9dcb1b 688 dec:ad22e4ce6f631dc2
+64x64 q20 g6 431bd61f8bf2d7d8 245 dec:2f0d4f2974e85f25
+129x77 q5 g6 6bd1604894921f38 7726 dec:08a7a4dc0d88f07a
+200x150 q40 g7 2772fc938c797092 691 dec:b3b51c3f99c050ae

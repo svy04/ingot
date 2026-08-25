@@ -5,20 +5,20 @@
 <p align="center">
   <a href="https://github.com/svy04/ingot/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-087ea3" alt="License Apache-2.0"></a>
   <a href="https://github.com/svy04/ingot/stargazers"><img src="https://img.shields.io/github/stars/svy04/ingot?color=087ea3&label=%E2%98%85" alt="Stars"></a>
-  <img src="https://img.shields.io/badge/C99-8%2C512%20lines-087ea3" alt="8,512 lines of C99">
+  <img src="https://img.shields.io/badge/C99-8%2C701%20lines-087ea3" alt="8,701 lines of C99">
   <img src="https://img.shields.io/badge/deps-libc%20only-5d6e73" alt="Zero dependencies">
 </p>
 
-A lossy image codec built to win on **several axes at once** — not just compression ratio. This is **v1.14**.
+A lossy image codec built to win on **several axes at once** — not just compression ratio. This is **v1.15**.
 
 [한국어](README.ko.md)
 
 Most codecs trade one property for another. ingot picks the axes that were left empty because nobody optimized for them, and locks them into the format itself.
 
-- **Ahead of JPEG, WebP and JPEG XL on all three metrics** — against JPEG **−40.9%** (PSNR), **−42.4%** (SSIM), **−34.6%** (SSIMULACRA2) on standard photos; against WebP **−28.1%**, **−21.0%**, **−26.1%**; against JPEG XL **−25.3%**, **−13.3%**, **−3.6%**. Against AVIF we are ahead on the perceptual metric by **−9.9%** and behind on the two squared-error ones by **+13.7%** and **+7.1%**.
+- **Ahead of JPEG, WebP and JPEG XL on all three metrics** — against JPEG **−41.0%** (PSNR), **−42.7%** (SSIM), **−34.7%** (SSIMULACRA2) on standard photos; against WebP **−28.2%**, **−21.3%**, **−26.2%**; against JPEG XL **−25.4%**, **−13.8%**, **−3.8%**. Against AVIF we are ahead on the perceptual metric by **−10.1%** and behind on the two squared-error ones by **+13.4%** and **+6.5%**.
 - **Bit-exact** — integer math only, zero floating-point operations in the library. The same input always produces the same bytes.
 - **Thread count never enters the bitstream** — any number of threads, identical bytes out. The price is real and grows as groups shrink: against one group per image, **1.1%** at 512, **3.3%** at 256, **20.3%** at 64 (6 images, 6 quality steps, measured 2026-08-24 on the v1.8 encoder). The default is now 1024, which is where that measurement put its zero. Tiling in existing standards costs 3.7–8%. **The v1.9 encoder has not been re-measured on this axis** — it added four prediction modes, which changes what a small group has to learn.
-- **Small** — 8,512 lines of C99 in `src/` (`src/*.c src/*.h`), of which 7,119 are on the decode path — everything but `encode.c`. Most of that is tables: the integer transform matrices up to 64×64 and a learned probability table. 1,804 lines sit behind knobs that are off — a second probability table, sine-transform matrices, 128-point transform tables, and a restoration filter, each kept because it is a measured near-miss. No dependencies beyond libc.
+- **Small** — 8701 lines of C99 in `src/` (`src/*.c src/*.h`), of which 7197 are on the decode path — everything but `encode.c`. Most of that is tables: the integer transform matrices up to 64×64 and a learned probability table. 1,804 lines sit behind knobs that are off — a second probability table, sine-transform matrices, 128-point transform tables, and a restoration filter, each kept because it is a measured near-miss. No dependencies beyond libc.
 - **Hostile input is expected** — the decoder returns error codes, never crashes. 300 corrupted files, 0 abnormal exits.
 
 ```console
@@ -43,12 +43,12 @@ Input and output are PPM (P6, 8-bit) only. Convert other formats with ffmpeg.
 
 | vs | PSNR | SSIM | SSIMULACRA2 |
 |---|---|---|---|
-| JPEG | **−40.9%** | **−42.4%** | **−34.6%** |
-| WebP | **−28.1%** | **−21.0%** | **−26.1%** |
-| JPEG XL | **−25.3%** | **−13.3%** | **−3.6%** |
-| AVIF | +13.7% | +7.1% | **−9.9%** |
+| JPEG | **−41.0%** | **−42.7%** | **−34.7%** |
+| WebP | **−28.2%** | **−21.3%** | **−26.2%** |
+| JPEG XL | **−25.4%** | **−13.8%** | **−3.8%** |
+| AVIF | +13.4% | +6.5% | **−10.1%** |
 
-**AVIF is still ahead on both squared-error metrics, and the gap is 13.7%.** That is not a rounding difference — it is roughly what a mature encoder with dozens of directional prediction modes and a transform-type search buys. Measured per quality step, the gap is 1.11–1.25× at PSNR 30 and 1.3–1.96× at PSNR 40: we lose most at high quality, on flat images. The header — split flags, mode symbols, the last-coefficient position — is 13–16% of the file on those images and 4.6% on the ones where we do best.
+**AVIF is still ahead on both squared-error metrics, and the gap is 13.4%.** That is not a rounding difference — it is roughly what a mature encoder with dozens of directional prediction modes and a transform-type search buys. Measured per quality step, the gap is 1.11–1.25× at PSNR 30 and 1.3–1.96× at PSNR 40: we lose most at high quality, on flat images. The header — split flags, mode symbols, the last-coefficient position — is 13–16% of the file on those images and 4.6% on the ones where we do best.
 
 **The third column is why v1.1 exists.** Up to v1.0 this codec was tuned against squared error alone. Adding a perceptual metric showed that at the old setting it lost to *JPEG* on SSIMULACRA2 (+5.6%) while appearing to beat WebP and JPEG XL on PSNR. One spec constant — how much coarser high-frequency coefficients are quantized — moved it from +5.6% to **−11.3%** against JPEG, at the cost of 2.4 points of PSNR. v1.1 takes that trade.
 
@@ -79,7 +79,7 @@ we do well, we do more of it here, and so does AVIF.
 |---|---|---|
 | Determinism | **done** | Encoding twice gives identical bytes. 0 float ops in `src/` |
 | Parallelism | **in the format; the default is now where the price is zero** | Against one group per image: 512 **+1.13%**, 256 +3.27%, 128 +8.31%, 64 **+20.29%** BD-rate (6 images, 6 quality steps, measured 2026-08-24 on the v1.8 encoder; 1024 was the reference). v1.9 moved the default to 1024 and has not been re-measured here. A 1196×1008 image is two groups at 1024 and was six at 512, so there is less to hand to threads. Probability tables still restart at every group boundary. The encoder writes each group into its own slot, so an OpenMP build parallelizes it; this machine has no OpenMP runtime |
-| Simplicity | **budgeted, never benchmarked against anyone** | Decode path 7,119 lines, 8,512 total, 0 external deps, spec under 14 pages. Most of the growth since 2,643 is tables — the 64×64 transform matrix alone is 64 lines of 64 numbers. 1,804 of those lines sit behind knobs that are off. No competitor has been measured on this axis |
+| Simplicity | **budgeted, never benchmarked against anyone** | Decode path 7,197 lines, 8,701 total, 0 external deps, spec under 14 pages. Most of the growth since 2,643 is tables — the 64×64 transform matrix alone is 64 lines of 64 numbers. 1,804 of those lines sit behind knobs that are off. No competitor has been measured on this axis |
 | Patent freedom | expired art only | DCT (1974), Golomb (1966), arithmetic coding (late 1970s). **No legal review yet** |
 | Decode speed | **slowest of the five, by 7×** | 0.456 s vs JPEG 0.050, WebP 0.065, AVIF 0.065, JXL 0.073 (2026-08-24, 6 images, best of three, process startup included). v1.8 added 64×64 blocks and a reference-smoothing pass; decode went from 0.249 s to 0.456 s and has stayed there since |
 | Encode speed | **slowest of the five, by 49×** | 11.975 s vs JPEG 0.067, WebP 0.132, JXL 0.165, AVIF 0.246. The encoder trial-encodes **all eight** prediction modes at every block size and recurses from 64×64 down to 4×4. Every compression gain in v1.8 and v1.9 was bought with encode time; the ratio was 28× one version ago. At that middle setting our file is 44,065 bytes against AVIF's 62,839 — not the same quality point, so read the two together, not either alone |
@@ -146,6 +146,7 @@ Each change was added one at a time and kept only if it measured better. Reverte
 | The same with the noise parameters four times higher | −0.36% | −0.02%, **SSIMULACRA2 +1.35% (not taken)** |
 | Chroma predicted from luma, after fixing a decoder mismatch (v1.13) | **−1.73%** | **−2.65%, SSIMULACRA2 −1.96%** |
 | Both chroma planes coded together, sharing one partition tree and one mode (v1.14) | **−0.54%** | **SSIM +0.10%, SSIMULACRA2 −0.55%** |
+| Four split children sharing one prediction mode, offered at 16×16 and above (v1.15) | **−0.19%** | **SSIM −0.42%, SSIMULACRA2 −0.15%** |
 
 **Four of those reverts were wrong, and finding out why is the most useful thing in this table.**
 

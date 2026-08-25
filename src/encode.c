@@ -510,7 +510,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                           int n, int base, int plane, uint16_t *probs,
                           int *pmode, int64_t lambda, int *mode_io,
                           const uint8_t *luma, int lstride, int *pempty,
-                          ingot_side *sd)
+                          ingot_side *sd, int forced)
 {
     int16_t src[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
             pred[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK],
@@ -573,14 +573,16 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 #endif
         for (k = 0; k < total; k++)
             resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
+        if (forced < 0) {
 #ifdef INGOT_BIT_STATS
-        ingot_bitplane = plane ? 1 : 0;
-        ingot_bitcat = INGOT_BC_MODE;
+            ingot_bitplane = plane ? 1 : 0;
+            ingot_bitcat = INGOT_BC_MODE;
 #endif
-        mode_write(w, probs, *pmode, best, n, plane);
+            mode_write(w, probs, *pmode, best, n, plane);
 #ifdef INGOT_BIT_STATS
-        ingot_bitcat = INGOT_BC_ZERO;
+            ingot_bitcat = INGOT_BC_ZERO;
 #endif
+        }
         *pmode = best;
         code_residual(w, resid, base, n, plane, probs, best_pred, out,
                       ingot_tx_of_mode(best), lambda, aqm, pempty);
@@ -600,6 +602,13 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 #else
     (void)mode_io;
 #endif
+
+    /* 물려받은 모드가 있으면 그것 하나만 담아 본다. 값을 재는 방식은 같다. */
+    if (forced >= 0) {
+        order[0] = forced;
+        for (m = 1; m < INGOT_PRED_COUNT; m++) order[m] = m;
+        goto trials;
+    }
 
     /* 1단계: 잔차의 절대합으로 후보 순위를 매긴다. 담아 보지 않으므로 싸다. */
     for (m = 0; m < INGOT_PRED_COUNT; m++) {
@@ -645,7 +654,8 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     }
 
     /* 2단계: 앞선 몇 개만 실제로 담아 보고 값과 비용으로 고른다. */
-    tries = INGOT_MODE_TRIALS;
+trials:
+    tries = (forced >= 0) ? 1 : INGOT_MODE_TRIALS;
     if (tries > INGOT_PRED_COUNT) tries = INGOT_PRED_COUNT;
 #if INGOT_CHROMA_MODES4
     /* 색차는 넷만 쓰므로 담아 보는 것도 넷까지다. 안 그러면 뺀 후보가
@@ -711,7 +721,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
          * 이미 그쪽으로 기울어 있어 싸고, 드문 모드는 비싸다. 이것을 고른 뒤
          * 상수로 더하면 후보 사이의 차이가 통째로 사라져, 모드 선택이 왜곡만
          * 보고 결정된다 (2026-08-22). */
-        bits += mode_price(probs, *pmode, m, n, plane);
+        if (forced < 0) bits += mode_price(probs, *pmode, m, n, plane);
         dist = block_distortion_n(src, out, total, n, bx, by);
 #if INGOT_JOINT_CHROMA
         if (sd) dist += block_distortion_n(src_b, out_b, total, n, bx, by);
@@ -736,7 +746,7 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
 
     /* 고른 모드로 쓴다. 모드 값은 위 시험 루프에서 이미 best_cost 에 들어갔다. */
-    {
+    if (forced < 0) {
 #ifdef INGOT_BIT_STATS
         ingot_bitplane = plane ? 1 : 0;
         ingot_bitcat = INGOT_BC_MODE;
@@ -745,8 +755,8 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 #ifdef INGOT_BIT_STATS
         ingot_bitcat = INGOT_BC_ZERO;
 #endif
-        *pmode = best;
     }
+    *pmode = best;
 #if INGOT_IDTX
     ingot_rc_enc_bit(w, &probs[INGOT_PROB_TX + ingot_tx_ctx(n)], tx_best);
     code_residual(w, resid, base, n, plane, probs, best_pred, out,
@@ -817,7 +827,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
                          int n, int base, int plane, uint16_t *probs,
                          int *pmode, int64_t lambda, ingot_plan *pl,
                          const uint8_t *luma, int lstride, int *pempty,
-                         ingot_side *sd)
+                         ingot_side *sd, int forced)
 {
     uint16_t save[INGOT_PROB_COUNT], pwhole[INGOT_PROB_COUNT];
     uint8_t patch[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
@@ -832,6 +842,10 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     int save_pm, try_pm;
     int save_e, try_e;
     int wmode = -1;
+#if INGOT_SHAREMODE
+    int64_t cost_share = 0;
+    int share_mode = -1;
+#endif
 #if INGOT_PLAN
     int slot = 0;
 #endif
@@ -842,12 +856,12 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         if (pl && pl->replay) {
             wmode = pl->buf[pl->pos++];
             return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                              n, base, plane, probs, pmode, lambda, &wmode, luma, lstride, pempty, sd);
+                              n, base, plane, probs, pmode, lambda, &wmode, luma, lstride, pempty, sd, forced);
         }
 #endif
         {
             int64_t c = code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
-                                   n, base, plane, probs, pmode, lambda, &wmode, luma, lstride, pempty, sd);
+                                   n, base, plane, probs, pmode, lambda, &wmode, luma, lstride, pempty, sd, forced);
 #if INGOT_PLAN
             if (pl) {
                 if (pl->len < INGOT_PLAN_MAX) pl->buf[pl->len++] = (int16_t)wmode;
@@ -860,7 +874,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 #if INGOT_PLAN
     /* 재생 중이면 적어 둔 판단을 그대로 따른다. 값은 이미 알고 있다. */
     if (pl && pl->replay) {
-        int what;
+        int what, sub_forced = forced;
         what = pl->buf[pl->pos++];
         if (what >= 0) {
             BS_SPLIT_ON();
@@ -869,16 +883,37 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
             wmode = what;
             return code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
                               n, base, plane, probs, pmode, lambda, &wmode,
-                              luma, lstride, pempty, sd);
+                              luma, lstride, pempty, sd, forced);
         }
         BS_SPLIT_ON();
         ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1);
         BS_SPLIT_OFF();
+#if INGOT_SHAREMODE
+        /* 적어 둔 값이 -1 이면 「나누고 모드도 따로」, -2 이하면
+         * 「나누되 모드 하나」이고 그 모드는 -2 - 값 이다. */
+        if (forced < 0 && n >= INGOT_SHARE_MIN) {
+            int sh = (what <= -2);
+            BS_SPLIT_ON();
+            ingot_rc_enc_bit(w, &probs[INGOT_PROB_SHARE + sidx], sh);
+            BS_SPLIT_OFF();
+            if (sh) {
+                sub_forced = -2 - what;
+#ifdef INGOT_BIT_STATS
+                ingot_bitcat = INGOT_BC_MODE;
+#endif
+                mode_write(w, probs, *pmode, sub_forced, n, plane);
+#ifdef INGOT_BIT_STATS
+                ingot_bitcat = INGOT_BC_ZERO;
+#endif
+                *pmode = sub_forced;
+            }
+        }
+#endif
         for (i = 0; i < 4; i++)
             code_quad(w, orig, recon, pw, ph,
                       bx + (i & 1) * h, by + (i >> 1) * h,
                       gx0, gy0, h, base, plane, probs, pmode, lambda, pl,
-                      luma, lstride, pempty, sd);
+                      luma, lstride, pempty, sd, sub_forced);
         return 0;
     }
     /* 적는 중이다. 이 마디의 판단이 들어갈 칸을 먼저 잡아 둔다. */
@@ -904,7 +939,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     ingot_rc_enc_init(&trial, scratch, 0);
     cost_whole = code_block(&trial, orig, recon, pw, ph, bx, by, gx0, gy0,
                             n, base, plane, pwhole, &try_pm, lambda, &wmode,
-                            luma, lstride, &try_e, sd)
+                            luma, lstride, &try_e, sd, forced)
                + lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
 #if INGOT_JOINT_CHROMA
@@ -933,7 +968,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
          * 실제보다 싸 보인다. */
         code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
                    n, base, plane, probs, pmode, lambda, &wmode,
-                   luma, lstride, pempty, sd);
+                   luma, lstride, pempty, sd, forced);
         return cost_whole;
     }
 
@@ -946,7 +981,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         cost_split += code_quad(&trial, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
                                 gx0, gy0, h, base, plane, probs, &try_pm, lambda,
-                                pl, luma, lstride, &try_e, sd);
+                                pl, luma, lstride, &try_e, sd, forced);
     cost_split += lambda * INGOT_BIT_UNIT;
     restore_patch(recon, pw, ph, bx, by, n, patch);
 #if INGOT_JOINT_CHROMA
@@ -957,6 +992,75 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     *pmode = save_pm;
     *pempty = save_e;
 
+#if INGOT_SHAREMODE
+    /* 후보 3: 넷으로 나누되 모드는 하나. 통째로 담을 때 이긴 모드를 쓴다 --
+     * 그 자리에서 가장 잘 맞는 모드이고, 열여섯을 다 되짚으면 인코딩이
+     * 열여섯 배가 된다.
+     *
+     * 계획에는 안 적는다. 후보 2 가 적어 둔 자리를 덮어쓰기 때문이다.
+     * 이쪽이 이기면 진짜로 쓸 때 다시 잰다. */
+    if (forced < 0 && wmode >= 0 && n >= INGOT_SHARE_MIN) {
+        memcpy(probs, save, sizeof(save));
+        try_pm = save_pm;
+        try_e = save_e;
+#if INGOT_JOINT_CHROMA
+        if (sd) sd->pempty = save_eb;
+#endif
+        ingot_rc_enc_init(&trial, scratch, 0);
+        cost_share = lambda * 2 * INGOT_BIT_UNIT       /* 나눔 비트 + 공유 비트 */
+                   + lambda * mode_price(probs, save_pm, wmode, n, plane);
+        mode_write(&trial, probs, save_pm, wmode, n, plane);   /* 확률 갱신용 */
+        try_pm = wmode;
+        for (i = 0; i < 4; i++)
+            cost_share += code_quad(&trial, orig, recon, pw, ph,
+                                    bx + (i & 1) * h, by + (i >> 1) * h,
+                                    gx0, gy0, h, base, plane, probs, &try_pm,
+                                    lambda, (ingot_plan *)0, luma, lstride,
+                                    &try_e, sd, wmode);
+        share_mode = wmode;
+        restore_patch(recon, pw, ph, bx, by, n, patch);
+#if INGOT_JOINT_CHROMA
+        if (sd) { restore_patch(sd->recon, pw, ph, bx, by, n, patch_b);
+                  sd->pempty = save_eb; }
+#endif
+        memcpy(probs, save, sizeof(save));
+        *pmode = save_pm;
+        *pempty = save_e;
+    }
+
+    /* 셋 중 공유가 가장 싸면 그것을 쓴다. */
+    if (share_mode >= 0 && cost_share < cost_whole && cost_share < cost_split) {
+        BS_SPLIT_ON();
+        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1);
+        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SHARE + sidx], 1);
+        BS_SPLIT_OFF();
+#ifdef INGOT_BIT_STATS
+        ingot_bitplane = plane ? 1 : 0;
+        ingot_bitcat = INGOT_BC_MODE;
+#endif
+        mode_write(w, probs, *pmode, share_mode, n, plane);
+#ifdef INGOT_BIT_STATS
+        ingot_bitcat = INGOT_BC_ZERO;
+#endif
+#if INGOT_PLAN
+        if (pl) { pl->len = slot + 1; pl->buf[slot] = (int16_t)(-2 - share_mode); }
+#endif
+        /* 돌려줄 값에도 모드 값을 넣는다. 안 넣으면 위 마디가 이 갈래를
+         * 실제보다 싸게 보고 고른다 -- 나눔 비트만 세고 그 자리에 실린
+         * 모드 기호를 안 센 셈이 된다. */
+        cost_share = lambda * (2 * INGOT_BIT_UNIT
+                     + mode_price(probs, *pmode, share_mode, n, plane));
+        *pmode = share_mode;
+        for (i = 0; i < 4; i++)
+            cost_share += code_quad(w, orig, recon, pw, ph,
+                                    bx + (i & 1) * h, by + (i >> 1) * h,
+                                    gx0, gy0, h, base, plane, probs, pmode,
+                                    lambda, pl, luma, lstride, pempty, sd,
+                                    share_mode);
+        return cost_share;
+    }
+#endif
+
     /* 이긴 쪽을 진짜로 쓴다. 계획이 있으면 다시 재지 않고 재생한다. */
     if (cost_whole <= cost_split) {
 #if INGOT_PLAN
@@ -965,10 +1069,17 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 0); BS_SPLIT_OFF();
         code_block(w, orig, recon, pw, ph, bx, by, gx0, gy0,
                    n, base, plane, probs, pmode, lambda, &wmode,
-                   luma, lstride, pempty, sd);
+                   luma, lstride, pempty, sd, forced);
         return cost_whole;
     }
-    BS_SPLIT_ON(); ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1); BS_SPLIT_OFF();
+    BS_SPLIT_ON();
+    ingot_rc_enc_bit(w, &probs[INGOT_PROB_SPLIT + sidx], 1);
+#if INGOT_SHAREMODE
+    /* 나누되 모드는 따로 -- 이미 물려받은 마디는 이 비트를 안 적는다. */
+    if (forced < 0 && n >= INGOT_SHARE_MIN)
+        ingot_rc_enc_bit(w, &probs[INGOT_PROB_SHARE + sidx], 0);
+#endif
+    BS_SPLIT_OFF();
 #if INGOT_PLAN
     if (pl) {
         /* 아래 넷의 판단은 방금 잰 자리에 그대로 있다. 되감아 재생한다. */
@@ -980,7 +1091,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
             code_quad(w, orig, recon, pw, ph,
                       bx + (i & 1) * h, by + (i >> 1) * h,
                       gx0, gy0, h, base, plane, probs, pmode, lambda, pl,
-                      luma, lstride, pempty, sd);
+                      luma, lstride, pempty, sd, forced);
         pl->replay = save_rep;
         pl->pos = save_pos;
         pl->len = end;
@@ -992,7 +1103,7 @@ static int64_t code_quad(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         cost_split += code_quad(w, orig, recon, pw, ph,
                                 bx + (i & 1) * h, by + (i >> 1) * h,
                                 gx0, gy0, h, base, plane, probs, pmode, lambda,
-                                pl, luma, lstride, &try_e, sd);
+                                pl, luma, lstride, &try_e, sd, forced);
     return cost_split;
 }
 
@@ -1047,7 +1158,7 @@ static void write_plane_group(ingot_rc_enc *w, const uint8_t *orig, uint8_t *rec
 #endif
             code_quad(w, orig, recon, pw, ph, ox + mx, oy + my, ox, oy,
                       INGOT_MAX_BLOCK, base, p, probs, &pmode, lambda,
-                      PLAN_ARG, luma, lstride, &pempty, NULL);
+                      PLAN_ARG, luma, lstride, &pempty, NULL, -1);
         }
 }
 
@@ -1077,7 +1188,7 @@ static void write_chroma_group(ingot_rc_enc *w,
 #endif
             code_quad(w, o1, r1, pw, ph, ox + mx, oy + my, ox, oy,
                       INGOT_MAX_BLOCK, base, 1, probs, &pmode, lambda,
-                      PLAN_ARG, luma, lstride, &pempty, &sd);
+                      PLAN_ARG, luma, lstride, &pempty, &sd, -1);
         }
 }
 #endif

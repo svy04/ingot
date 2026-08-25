@@ -729,6 +729,27 @@ typedef struct {
 #define INGOT_JOINT_CHROMA 1
 #endif
 
+/* 나눔한 네 조각이 예측 모드 하나를 나눠 쓸지.
+ *
+ * 지금은 32x32 를 넷으로 나누면 모드 기호도 넷이 실린다. 비트를 세어 보니
+ * 모드가 품질 40 에서 파일의 17.6%, 품질 4 에서 7.4% 다. AV1 은 예측
+ * 블록 하나 안에서 변환만 나누므로 그 자리에 모드가 하나다.
+ *
+ * 켜면 후보가 셋이 된다: 통째로 하나 / 넷으로 나누고 모드도 넷 /
+ * 넷으로 나누되 모드는 하나. 셋을 재서 싼 것을 쓴다. */
+#ifndef INGOT_SHAREMODE
+#define INGOT_SHAREMODE 1
+#endif
+
+/* 공유 비트를 몇 이상인 마디에서만 물을지.
+ *
+ * 비트는 나눈 마디마다 하나씩 든다. 고품질에서는 마디가 거의 다 나뉘고
+ * 그중 공유가 이기는 자리는 드물어서, 문턱이 없으면 품질 4 에서 1% 를
+ * 되레 잃는다. 작은 블록 넷이 모드 하나로 버티기 어려운 것도 같은 까닭이다. */
+#ifndef INGOT_SHARE_MIN
+#define INGOT_SHARE_MIN 16
+#endif
+
 #if INGOT_JOINT_CHROMA && INGOT_IDTX
 #error "합동 색차와 항등 변환은 아직 같이 못 쓴다"
 #endif
@@ -1370,7 +1391,14 @@ static inline int ingot_zero_level(int nb)
 #else
 #define INGOT_SPLIT_LEVELS 2                        /* 16->8 과 8->4 */
 #endif
-#define INGOT_PROB_MODE    (INGOT_PROB_SPLIT + INGOT_SPLIT_LEVELS)
+/* 공유 비트. 나눔 비트와 같은 눈금으로 크기마다 한 칸이다. */
+#if INGOT_SHAREMODE
+#define INGOT_SHARE_LEVELS INGOT_SPLIT_LEVELS
+#else
+#define INGOT_SHARE_LEVELS 0
+#endif
+#define INGOT_PROB_SHARE   (INGOT_PROB_SPLIT + INGOT_SPLIT_LEVELS)
+#define INGOT_PROB_MODE    (INGOT_PROB_SHARE + INGOT_SHARE_LEVELS)
 /* 나눔 비트의 모델 자리. 큰 크기부터 0 번이다. */
 #if INGOT_BLK128
 #define INGOT_SPLIT_IDX(n) ((n) == 128 ? 0 : (n) == 64 ? 1 : (n) == 32 ? 2                           : (n) == 16 ? 3 : 4)
