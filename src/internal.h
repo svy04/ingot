@@ -345,7 +345,7 @@ static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
  * 분모가 작아 값이 튀고, 그 튄 기울기를 블록 전체에 곱하기 때문이라고
  * 본다(추정). 쓰려면 기울기가 못 미더울 때 물러설 길이 필요하다. */
 #ifndef INGOT_CFL
-#define INGOT_CFL 0
+#define INGOT_CFL 1
 #endif
 #if INGOT_MODES32
 #define INGOT_PRED_COUNT  32

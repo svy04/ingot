@@ -287,7 +287,7 @@ static int read_plane_group(ingot_rc_dec *r, uint8_t *plane,
                             const uint8_t *luma, int lstride, int pw, int ph,
                             int ox, int oy, int gw, int gh,
                             int base, int p, uint16_t *probs,
-                            uint8_t *map, int ms, int lf)
+                            uint8_t *map, int ms, int lf, uint8_t *pre_out)
 {
     int my, mx, pmode = INGOT_PRED_DC;   /* 조각·평면마다 DC 에서 시작한다 */
     int pempty = 0;                     /* 앞 블록이 비었는가 */
@@ -297,6 +297,16 @@ static int read_plane_group(ingot_rc_dec *r, uint8_t *plane,
             if (read_quad(r, plane, pw, ph, ox + mx, oy + my, ox, oy,
                           INGOT_MAX_BLOCK, base, p, probs, &pmode, map, ms, luma, lstride, &pempty))
                 return 1;
+    /* 색차가 볼 휘도는 **필터를 걸기 전** 값이어야 한다. 인코더는 자기
+     * 복원 버퍼를 안 거르므로 필터 전 값을 보고 기울기를 뽑는다. 디코더가
+     * 필터 뒤 값을 보면 양쪽이 다른 예측을 만든다 -- 2026-08-25 에 이
+     * 어긋남으로 q20 에서 7.4 dB 를 잃었다. 두 필터가 걸리기 전에 뜬다. */
+    if (pre_out) {
+        int yy;
+        for (yy = 0; yy < gh; yy++)
+            memcpy(pre_out + (size_t)(oy + yy) * pw + ox,
+                   plane + (size_t)(oy + yy) * pw + ox, (size_t)gw);
+    }
     if (lf) ingot_loopfilter(plane, pw, ox, oy, gw, gh, map, ms, base, p ? 1 : 0);
 #if INGOT_DERINGE
     /* 경계 필터 다음에 건다. 거르기 전 사본에서 읽어야 옆 화소가 이미
@@ -339,6 +349,11 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
     uint8_t *big[2] = { NULL, NULL };
     const uint8_t *cb, *cr;
     uint8_t *rgb = NULL;
+#if INGOT_CFL
+    uint8_t *lfpre = NULL;     /* 필터 전 휘도. 색차 예측이 본다 */
+#else
+    uint8_t *lfpre = NULL;
+#endif
     ingot_status st;
     uint32_t gi;
     int p, qbase;
@@ -404,6 +419,12 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
         rgb = (uint8_t *)malloc(n * 3);
         lfms = h.gsize >> 2;
         lfmap = (uint8_t *)malloc((size_t)lfms * lfms);
+#if INGOT_CFL
+        if (!h.sub) {
+            lfpre = (uint8_t *)calloc(n, 1);
+            if (!lfpre) { st = INGOT_ERR_MEMORY; goto done; }
+        }
+#endif
         if (!plane[0] || !plane[1] || !plane[2] || !rgb || !lfmap) {
             st = INGOT_ERR_MEMORY; goto done;
         }
@@ -451,14 +472,19 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
 
         if (read_plane_group(&r, plane[0], NULL, 0, h.width, h.height,
                              ox, oy, gw, gh,
-                             qbase, 0, probs, lfmap, lfms, h.lf)) {
+                             qbase, 0, probs, lfmap, lfms, h.lf, lfpre)) {
             st = INGOT_ERR_BITSTREAM; goto done;
         }
         for (p = 1; p < 3; p++) {
             if (read_plane_group(&r, plane[p],
-                                 h.sub ? NULL : plane[0], h.width,
+#if INGOT_CFL
+                                 h.sub ? NULL : (lfpre ? lfpre : plane[0]),
+#else
+                                 h.sub ? NULL : plane[0],
+#endif
+                                 h.width,
                                  h.cw, h.ch, cox, coy, cgw, cgh,
-                                 qbase, p, probs, lfmap, lfms, h.lf)) {
+                                 qbase, p, probs, lfmap, lfms, h.lf, NULL)) {
                 st = INGOT_ERR_BITSTREAM; goto done;
             }
         }
@@ -541,6 +567,7 @@ ingot_status ingot_decode(const uint8_t *data, size_t size,
 done:
     for (p = 0; p < 3; p++) free(plane[p]);
     free(lfmap);
+    free(lfpre);
     for (p = 0; p < 2; p++) free(big[p]);
     free(rgb);
     return st;
