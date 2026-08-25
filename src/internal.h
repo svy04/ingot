@@ -324,6 +324,52 @@ static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
 #define INGOT_REFFILT_ANGLE 1
 #endif
 
+/* 참조 화소 평활화를 각도마다 다르게 걸지. 지금은 모든 모드에 같은
+ * [1,2,1] 을 건다. 수직·수평에 가까운 각도는 이웃을 곧게 훑으므로 이미
+ * 섞이는 것이 적어 필터가 결을 깎기만 한다. 비스듬한 각도는 두 화소를
+ * 섞으며 훑으니 미리 고르는 것이 맞다.
+ *
+ * AV1 의 intra edge filter 가 같은 생각이다 -- 각도가 수직·수평에서
+ * 멀수록 세게 건다. */
+#ifndef INGOT_REFFILT_BYANGLE
+#define INGOT_REFFILT_BYANGLE 0
+#endif
+
+/* 각도 하나를 PAETH 예측으로 갈아 끼울지. 모드 수는 그대로다.
+ *
+ * PAETH 는 화소마다 위·왼쪽·위왼쪽 가운데 (위 + 왼쪽 − 위왼쪽) 에 가장
+ * 가까운 값을 고른다. 기울기가 낮은 쪽 참조를 쓰는 셈이라, 모서리가
+ * 지나는 자리에서 어느 쪽 면에 속하는지를 화소마다 고른다.
+ *
+ * 4 모드 시절에 재서 졌으나(+0.9~1.5%p) 그때는 모드가 넷이고 조각이
+ * 512 였다. 원문: Valin 외, Non-directional Smooth Intra Predictors 절. */
+#ifndef INGOT_PAETH
+#define INGOT_PAETH 0
+#endif
+
+/* 매끄러운 보간의 무게를 2차 곡선으로 할지. 지금은 거리에 비례하는 직선
+ * 무게다. 원문은 「세로·가로 방향의 2차 보간」이라고 적는다 -- 가까운
+ * 참조를 더 오래 붙들고 있다가 뒤에서 빠르게 넘긴다.
+ *
+ * 원문: Valin 외, Non-directional Smooth Intra Predictors 절. */
+#ifndef INGOT_SMOOTH_Q
+#define INGOT_SMOOTH_Q 0
+#endif
+
+/* 어느 각도를 갈아 끼울지. 각도 표의 자리 번호다. 기본은 마지막(가장
+ * 눕는 각도)이다. */
+#ifndef INGOT_PAETH_SLOT
+#define INGOT_PAETH_SLOT (INGOT_ANGLE_N - 1)
+#endif
+
+/* 이 기울기 이하(거의 세로)와 이상(거의 가로)에는 안 건다. 1/32 눈금이다. */
+#ifndef INGOT_REFFILT_LO
+#define INGOT_REFFILT_LO 8
+#endif
+#ifndef INGOT_REFFILT_HI
+#define INGOT_REFFILT_HI 128
+#endif
+
 /* 인코더가 D45 를 후보에서 뺄지. 규격은 안 바뀐다 -- 디코더는 그 모드를
  * 그대로 읽을 수 있고, 안 쓰이면 그 기호의 확률이 0 쪽으로 수렴한다. */
 #ifndef INGOT_NO_D45

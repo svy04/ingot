@@ -166,6 +166,20 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
     /* 각도 예측은 이웃을 비스듬히 훑으며 이미 두 화소를 섞는다. 거기에
      * 평활화를 또 걸면 결이 두 번 뭉개진다. */
     int skip_f = (mode >= INGOT_PRED_D45);
+#elif INGOT_MODES8 && INGOT_REFFILT_BYANGLE
+    /* 각도가 수직·수평에 가까우면 안 건다. 기울기 절댓값이 크면 거의
+     * 가로, 아주 작으면 거의 세로다. 그 사이만 건다. */
+    int skip_f = 0;
+    if (mode >= INGOT_PRED_D45) {
+        int ai = mode - INGOT_PRED_D45;
+        int adx;
+        if (ai >= INGOT_ANGLE_N) ai = INGOT_ANGLE_N - 1;
+        adx = ingot_angle_tab[ai][0];
+        if (adx < 0) adx = -adx;
+        skip_f = (adx <= INGOT_REFFILT_LO || adx >= INGOT_REFFILT_HI);
+    } else if (mode == INGOT_PRED_V || mode == INGOT_PRED_H) {
+        skip_f = 1;          /* 곧게 훑으므로 섞이는 것이 없다 */
+    }
 #else
     int skip_f = 0;
 #endif
@@ -189,6 +203,28 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
     if (mode >= INGOT_PRED_D45) {
         int a = mode - INGOT_PRED_D45;
         if (a >= INGOT_ANGLE_N) a = INGOT_ANGLE_N - 1;
+#if INGOT_PAETH
+        if (a == INGOT_PAETH_SLOT) {
+            /* PAETH. 화소마다 위·왼쪽·위왼쪽 중 (위 + 왼쪽 − 위왼쪽) 에
+             * 가장 가까운 값을 고른다. */
+            int tl = nb->topleft;
+            for (y = 0; y < n; y++) {
+                int l = nb->left[y];
+                for (x = 0; x < n; x++) {
+                    int t = nb->top[x];
+                    int base = t + l - tl;
+                    int dt = base - t, dl = base - l, dq = base - tl;
+                    int v;
+                    if (dt < 0) dt = -dt;
+                    if (dl < 0) dl = -dl;
+                    if (dq < 0) dq = -dq;
+                    v = (dt <= dl && dt <= dq) ? t : (dl <= dq) ? l : tl;
+                    pred[y * n + x] = (int16_t)ingot_clamp_u8(v);
+                }
+            }
+            return;
+        }
+#endif
         pred_angle(nb, ingot_angle_tab[a][0], ingot_angle_tab[a][1], pred);
         return;
     }
@@ -316,6 +352,25 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
     {
         int tr = nb->has_top ? nb->top[n - 1] : 128;     /* 위 행의 오른쪽 끝 */
         int bl = nb->has_left ? nb->left[n - 1] : 128;   /* 왼쪽 열의 아래 끝 */
+#if INGOT_SMOOTH_Q
+        /* 2차 무게. 가까운 참조를 더 오래 붙들고 있다가 뒤에서 빠르게
+         * 넘긴다. 256 분모로 잡고 마지막에 한 번만 내린다. */
+        {
+            int wq[INGOT_MAX_BLOCK];
+            int d = (n - 1) * (n - 1);
+            for (i = 0; i < n; i++)
+                wq[i] = d ? 256 - (256 * i * i) / d : 256;
+            for (y = 0; y < n; y++) {
+                for (x = 0; x < n; x++) {
+                    int a2 = wq[y], b2 = wq[x];
+                    int v = a2 * nb->top[x] + (256 - a2) * bl
+                          + b2 * nb->left[y] + (256 - b2) * tr;
+                    pred[y * n + x] =
+                        (int16_t)ingot_clamp_u8((v + 256) >> 9);
+                }
+            }
+        }
+#else
         for (y = 0; y < n; y++) {
             for (x = 0; x < n; x++) {
                 int wv = n - 1 - y, wh = n - 1 - x;
@@ -324,6 +379,7 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
                 pred[y * n + x] = (int16_t)ingot_clamp_u8((v + n) / (2 * n));
             }
         }
+#endif
         return;
     }
 #endif
