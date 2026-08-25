@@ -697,7 +697,7 @@ static inline int ingot_dequantize(int level, int step)
 #define INGOT_QW_ALPHA 1
 #endif
 #ifndef INGOT_QW_CHROMA
-#define INGOT_QW_CHROMA 24   /* 지각 카드. 위 ALPHA16 주석 참조 */
+#define INGOT_QW_CHROMA 28   /* 지각 카드. 위 ALPHA16 주석 참조 */
 #endif
 
 /* 같은 기울기를 1/16 눈금으로 적는 자리. 기본값은 INGOT_QW_ALPHA 를 그대로
