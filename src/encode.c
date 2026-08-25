@@ -132,6 +132,37 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
         if (level != 0) last = k + 1;
     }
 
+#if INGOT_RDOQ_ALL
+    /* 계수마다 크기를 하나 낮추는 것이 이득인지 본다. 크기가 1 인 계수를
+     * 0 으로 만들면 「0 인가」 깃발까지 뒤집히므로 더 크게 번다 -- 그 몫을
+     * 0 깃발 값으로 얹어 센다. 꼬리 절단보다 먼저 돌아야 한다: 여기서
+     * 꼬리가 0 이 되면 그 다음에 잘릴 자리가 늘어난다. */
+    {
+        int k2;
+        for (k2 = 0; k2 < last; k2++) {
+            int idx = zz[k2];
+            int step = ingot_qstep_aq(base, idx, n, plane, aqm);
+            int z0 = z[k2], nz;
+            int64_t e0, e1, dd, saved;
+            if (z0 == 0) continue;
+            nz = z0 > 0 ? z0 - 1 : z0 + 1;
+            /* 마지막 비영 자리를 0 으로 만들면 last 의 뜻이 깨진다.
+             * 그 자리는 꼬리 절단이 따로 다룬다. */
+            if (k2 == last - 1 && nz == 0) continue;
+            e0 = (int64_t)coef[idx] - ingot_dequantize((int16_t)z0, step);
+            e1 = (int64_t)coef[idx] - ingot_dequantize((int16_t)nz, step);
+            dd = (e1 * e1 - e0 * e0) * ingot_tx_gain256(n) / 256;
+            saved = sh_bits(z0) - sh_bits(nz);
+            if (nz == 0)
+                saved += (int64_t)INGOT_RDOQ_ZBIT * INGOT_BIT_UNIT / 16;
+            if (dd * INGOT_RD_SCALE * 16
+                    < lambda * saved * INGOT_RDOQ_ALL_LAM)
+                z[k2] = (int16_t)nz;
+        }
+        while (last > 0 && z[last - 1] == 0) last--;
+    }
+#endif
+
 #if INGOT_RDOQ
     /* 꼬리를 자른다. 마지막 비영 계수를 0 으로 만들면 새 last 는 그 앞
      * 비영 계수의 다음 자리가 되므로, 사이에 놓인 0 들의 깃발까지 한꺼번에

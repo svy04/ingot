@@ -486,6 +486,20 @@ static inline int ingot_tx_of_mode(int mode)
 #define INGOT_RDOQ 1
 #endif
 
+/* 계수마다 크기를 하나 낮추는 것이 이득인지도 볼지. 꼬리 절단은 마지막
+ * 계수만 보는데, 이것은 모든 계수를 본다. 크기가 1 인 계수를 0 으로
+ * 만들면 「0 인가」 깃발까지 뒤집혀 크게 번다.
+ *
+ * **디코더도 확률표도 안 바뀐다** -- 인코더가 더 나은 계수를 고를 뿐이다. */
+#ifndef INGOT_RDOQ_ALL
+#define INGOT_RDOQ_ALL 0
+#endif
+
+/* 크기를 낮출 때 쓰는 무게. 16 분모다. */
+#ifndef INGOT_RDOQ_ALL_LAM
+#define INGOT_RDOQ_ALL_LAM 3
+#endif
+
 /* 0 깃발 하나의 값. 16 분모다 (8 이면 0.5 비트). */
 #ifndef INGOT_RDOQ_ZBIT
 #define INGOT_RDOQ_ZBIT 8
