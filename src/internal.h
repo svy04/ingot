@@ -347,6 +347,12 @@ static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
 #ifndef INGOT_CFL
 #define INGOT_CFL 1
 #endif
+
+/* 색차 유도를 어느 모드 자리에 붙일지. 0 이면 넷째(평면), 1 이면 DC 다.
+ * 색차 블록은 DC 를 훨씬 자주 고르므로 DC 자리에 붙이면 자주 쓰인다. */
+#ifndef INGOT_CFL_AT_DC
+#define INGOT_CFL_AT_DC 0
+#endif
 #if INGOT_MODES32
 #define INGOT_PRED_COUNT  32
 #elif INGOT_MODES16
@@ -691,7 +697,7 @@ static inline int ingot_dequantize(int level, int step)
 #define INGOT_QW_ALPHA 1
 #endif
 #ifndef INGOT_QW_CHROMA
-#define INGOT_QW_CHROMA 28   /* 지각 카드. 위 ALPHA16 주석 참조 */
+#define INGOT_QW_CHROMA 24   /* 지각 카드. 위 ALPHA16 주석 참조 */
 #endif
 
 /* 같은 기울기를 1/16 눈금으로 적는 자리. 기본값은 INGOT_QW_ALPHA 를 그대로

@@ -194,58 +194,17 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
     }
 #endif
 
-    if (mode == INGOT_PRED_DC) {
-        int sum = 0, cnt = 0, dc;
-        if (nb->has_top)  { for (i = 0; i < n; i++) sum += nb->top[i];  cnt += n; }
-        if (nb->has_left) { for (i = 0; i < n; i++) sum += nb->left[i]; cnt += n; }
-        dc = cnt ? ((sum + (cnt >> 1)) / cnt) : 128;
-        for (i = 0; i < n * n; i++) pred[i] = (int16_t)dc;
-        return;
-    }
-
-    if (mode == INGOT_PRED_V) {
-        for (y = 0; y < n; y++)
-            for (x = 0; x < n; x++)
-                pred[y * n + x] = (int16_t)nb->top[x];
-#if INGOT_EDGEFIX
-        /* 왼쪽 몇 열을 왼쪽 이웃 쪽으로 당긴다. 멀어질수록 덜 당긴다.
-         * 위-왼쪽 모서리를 기준으로 잰 차이를 쓴다. */
-        if (nb->has_top && nb->has_left && nb->has_topleft) {
-            int lim = n < 4 ? n : 4;
-            for (y = 0; y < n; y++) {
-                int d = nb->left[y] - nb->topleft;
-                for (x = 0; x < lim; x++)
-                    pred[y * n + x] = (int16_t)ingot_clamp_u8(
-                        pred[y * n + x] + (d >> (x + 1)));
-            }
-        }
-#endif
-        return;
-    }
-
-    if (mode == INGOT_PRED_H) {
-        for (y = 0; y < n; y++)
-            for (x = 0; x < n; x++)
-                pred[y * n + x] = (int16_t)nb->left[y];
-#if INGOT_EDGEFIX
-        if (nb->has_top && nb->has_left && nb->has_topleft) {
-            int lim = n < 4 ? n : 4;
-            for (x = 0; x < n; x++) {
-                int d = nb->top[x] - nb->topleft;
-                for (y = 0; y < lim; y++)
-                    pred[y * n + x] = (int16_t)ingot_clamp_u8(
-                        pred[y * n + x] + (d >> (y + 1)));
-            }
-        }
-#endif
-        return;
-    }
-
 #if INGOT_CFL
     /* 색차이고 휘도를 받았으면 휘도에서 끌어온다. 기울기·절편은 위 행과
      * 왼쪽 열의 (휘도, 색차) 짝에서 최소제곱으로 뽑는다 -- 양쪽이 같은
-     * 값을 보므로 신호할 것이 없다. */
-    if (nb->luma) {
+     * 값을 보므로 신호할 것이 없다.
+     *
+     * 어느 모드 자리에 붙일지가 문제다. 넷째(평면) 자리에 붙였더니 색차
+     * 블록이 DC 를 훨씬 자주 골라서 이 예측이 잘 안 쓰였다. DC 자리로
+     * 옮기면 자주 쓰이지만, 이웃이 평평한 자리에서는 DC 가 더 나을 수 있다.
+     * 재서 정한다. */
+    if (nb->luma && INGOT_CFL_AT_DC == (mode == INGOT_PRED_DC ? 1 : 0)
+        && (mode == INGOT_PRED_DC || mode == INGOT_PRED_PLANE)) {
         const uint8_t *L = nb->luma;
         int ls = nb->luma_stride, bx = nb->bx, by = nb->by;
         int cnt = 0;
@@ -300,6 +259,54 @@ void ingot_predict(const ingot_neighbors *nb_in, int mode, int16_t *pred)
         }
     }
 #endif
+
+    if (mode == INGOT_PRED_DC) {
+        int sum = 0, cnt = 0, dc;
+        if (nb->has_top)  { for (i = 0; i < n; i++) sum += nb->top[i];  cnt += n; }
+        if (nb->has_left) { for (i = 0; i < n; i++) sum += nb->left[i]; cnt += n; }
+        dc = cnt ? ((sum + (cnt >> 1)) / cnt) : 128;
+        for (i = 0; i < n * n; i++) pred[i] = (int16_t)dc;
+        return;
+    }
+
+    if (mode == INGOT_PRED_V) {
+        for (y = 0; y < n; y++)
+            for (x = 0; x < n; x++)
+                pred[y * n + x] = (int16_t)nb->top[x];
+#if INGOT_EDGEFIX
+        /* 왼쪽 몇 열을 왼쪽 이웃 쪽으로 당긴다. 멀어질수록 덜 당긴다.
+         * 위-왼쪽 모서리를 기준으로 잰 차이를 쓴다. */
+        if (nb->has_top && nb->has_left && nb->has_topleft) {
+            int lim = n < 4 ? n : 4;
+            for (y = 0; y < n; y++) {
+                int d = nb->left[y] - nb->topleft;
+                for (x = 0; x < lim; x++)
+                    pred[y * n + x] = (int16_t)ingot_clamp_u8(
+                        pred[y * n + x] + (d >> (x + 1)));
+            }
+        }
+#endif
+        return;
+    }
+
+    if (mode == INGOT_PRED_H) {
+        for (y = 0; y < n; y++)
+            for (x = 0; x < n; x++)
+                pred[y * n + x] = (int16_t)nb->left[y];
+#if INGOT_EDGEFIX
+        if (nb->has_top && nb->has_left && nb->has_topleft) {
+            int lim = n < 4 ? n : 4;
+            for (x = 0; x < n; x++) {
+                int d = nb->top[x] - nb->topleft;
+                for (y = 0; y < lim; y++)
+                    pred[y * n + x] = (int16_t)ingot_clamp_u8(
+                        pred[y * n + x] + (d >> (y + 1)));
+            }
+        }
+#endif
+        return;
+    }
+
 
 #if INGOT_SMOOTH
     /* 매끄러운 보간. 화소마다 위·왼쪽·오른쪽 끝·아래 끝을 거리로 섞는다.
