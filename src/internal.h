@@ -1196,7 +1196,57 @@ static inline int ingot_ctx_last_e(int plane, int n, int prev_empty)
 #ifndef INGOT_PROB_PER_CTX
 #define INGOT_PROB_PER_CTX 13
 #endif
-#define INGOT_PROB_SPLIT   (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
+
+/* 「0 인가」 깃발에만 더 잘게 나눈 이웃 문맥을 줄지.
+ *
+ * 이 깃발은 고품질에서 파일의 36.6% 를 쓴다. 나머지 깃발과 지수 골롬은
+ * 다 합쳐도 그만 못하다. 그런데 지금은 깃발 다섯이 **같은 문맥 무리**를
+ * 쓴다 -- 무리를 늘리면 「0 인가」뿐 아니라 잘 안 쓰이는 깃발들까지 같이
+ * 갈려서 표본이 모자라진다. 이웃 아홉 단계가 진 까닭이 그것일 수 있다.
+ *
+ * 원문이 같은 자리를 짚는다: 「낮은 레벨이 비트 비용의 대부분을 차지한다」
+ * 는 관찰에서, 레벨 0~2 를 따로 떼어 **거기에만 풍부한 문맥**을 주고 높은
+ * 레벨은 줄인 문맥을 쓴다 (Valin 외, Level Map Coefficient Coding 절).
+ *
+ * 우리 판은 「0 인가」 깃발 하나만 떼어 이웃 단계를 아홉으로 준다. */
+#ifndef INGOT_ZERO_CTX
+#define INGOT_ZERO_CTX 0
+#endif
+
+/* 「0 인가」 전용 이웃 단계 수. */
+#ifndef INGOT_ZERO_NBLEV
+#define INGOT_ZERO_NBLEV 9
+#endif
+
+#if INGOT_ZERO_CTX
+/* 그 깃발은 제 무리 배열을 쓰므로 본 배열에서는 한 칸이 빈다. */
+#define INGOT_PER_CTX_EFF  (INGOT_PROB_PER_CTX)
+#define INGOT_ZERO_COUNT   (INGOT_CTX_SIZES * INGOT_BANDS * INGOT_ZERO_NBLEV * 2)
+#else
+#define INGOT_PER_CTX_EFF  (INGOT_PROB_PER_CTX)
+#define INGOT_ZERO_COUNT   0
+#endif
+
+/* 이웃 합을 「0 인가」 전용 단계로 나눈다. 본 단계보다 잘다. */
+static inline int ingot_zero_level(int nb)
+{
+#if INGOT_ZERO_NBLEV >= 9
+    if (nb == 0) return 0;
+    if (nb <= 1) return 1;
+    if (nb <= 2) return 2;
+    if (nb <= 3) return 3;
+    if (nb <= 5) return 4;
+    if (nb <= 8) return 5;
+    if (nb <= 13) return 6;
+    if (nb <= 22) return 7;
+    return 8;
+#else
+    return ingot_ctx_level(nb);
+#endif
+}
+/* 「0 인가」 전용 무리는 계수 무리 배열 뒤에 붙인다. */
+#define INGOT_PROB_ZERO    (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
+#define INGOT_PROB_SPLIT   (INGOT_PROB_ZERO + INGOT_ZERO_COUNT)
 #if INGOT_BLK128
 #define INGOT_SPLIT_LEVELS 5     /* 128->64, 64->32, 32->16, 16->8, 8->4 */
 #elif INGOT_BLK64
@@ -1455,8 +1505,15 @@ void ingot_rc_put_uint(ingot_rc_enc *e, uint16_t *m, uint32_t k);
 uint32_t ingot_rc_get_uint(ingot_rc_dec *d, uint16_t *m);
 /* lo = 「값이 lo 이상인 것을 디코더도 이미 안다」. 그만큼 깃발을 건너뛴다. */
 void ingot_rc_put_uint_from(ingot_rc_enc *e, uint16_t *m, uint32_t k, int lo);
+void ingot_rc_put_uint_fromz(ingot_rc_enc *e, uint16_t *m, uint16_t *mz,
+                             uint32_t k, int lo);
+void ingot_rc_put_int_fromz(ingot_rc_enc *e, uint16_t *m, uint16_t *mz,
+                            int v, int lo);
+int ingot_rc_get_int_fromz(ingot_rc_dec *d, uint16_t *m, uint16_t *mz, int lo);
 void ingot_rc_put_int_from(ingot_rc_enc *e, uint16_t *m, int v, int lo);
 uint32_t ingot_rc_get_uint_from(ingot_rc_dec *d, uint16_t *m, int lo);
+uint32_t ingot_rc_get_uint_fromz(ingot_rc_dec *d, uint16_t *m, uint16_t *mz,
+                                 int lo);
 int ingot_rc_get_int_from(ingot_rc_dec *d, uint16_t *m, int lo);
 
 void ingot_rc_dec_init(ingot_rc_dec *d, const uint8_t *buf, size_t size);
@@ -1465,6 +1522,25 @@ uint32_t ingot_rc_dec_bypass(ingot_rc_dec *d, int nbits);
 int  ingot_rc_get_int(ingot_rc_dec *d, uint16_t *m);
 
 /* 무리 번호로 모델 두 개의 자리를 얻는다. */
+/* 「0 인가」 깃발이 쓸 무리 번호. 계수 무리와 같은 축(크기·대역·평면)에
+ * 이웃 단계만 잘게 나눈 것이다. */
+static inline int ingot_zero_ctx(int k, int n, int plane, int nb)
+{
+    int kk = (n == 8) ? k : (k * 64) / (n * n);
+    int band = ingot_band_of(kk);
+    int lvl = ingot_zero_level(nb);
+#if INGOT_CTX_BYSIZE == 2
+    int sz = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2
+           : (n == 32) ? 3 : (n == 64) ? 4 : 5;
+#elif INGOT_CTX_BYSIZE == 1
+    int sz = (n >= 16) ? 1 : 0;
+#else
+    int sz = 0;
+#endif
+    return ((sz * INGOT_BANDS + band) * INGOT_ZERO_NBLEV + lvl)
+         + (plane ? (INGOT_ZERO_COUNT / 2) : 0);
+}
+
 static inline int ingot_prob_of(int ctx)
 {
     return ctx * INGOT_PROB_PER_CTX;

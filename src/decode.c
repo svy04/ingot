@@ -112,7 +112,8 @@ static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
     for (k = 0; k < (int)last; k++) {
         int idx = zz[k];
         int step = ingot_qstep_aq(base, idx, n, plane, aqm);
-        int lvl = ingot_ctx_level(ingot_nb2d(placed, idx, n));
+        int nbsum = ingot_nb2d(placed, idx, n);
+        int lvl = ingot_ctx_level(nbsum);
         /* k == last-1 이면 이 계수가 0 이 아닌 것을 여기서도 안다.
          * last 가 「마지막 비영 계수의 다음 자리」이기 때문이다.
          * 인코더가 그 깃발을 안 적었으므로 여기서도 건너뛴다. */
@@ -128,9 +129,16 @@ static int read_residual(ingot_rc_dec *r, int base, int n, int plane,
             sh_idx = idx; sh_step = step;
         } else
 #endif
+#if INGOT_ZERO_CTX
+        level = ingot_rc_get_int_fromz(
+            r, &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))],
+            &probs[INGOT_PROB_ZERO + ingot_zero_ctx(k, n, plane, nbsum)],
+            (k == (int)last - 1) ? 1 : 0);
+#else
         level = ingot_rc_get_int_from(
             r, &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))],
             (k == (int)last - 1) ? 1 : 0);
+#endif
         if (r->error) return 1;
         if (level > 32767 || level < -32768) return 1;
         placed[idx] = (int16_t)level;

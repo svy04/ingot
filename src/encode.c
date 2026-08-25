@@ -257,7 +257,8 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
         for (k = 0; k < total; k++) placed[k] = 0;
         for (k = 0; k < last; k++) {
             int idx = zz[k];
-            int lvl = ingot_ctx_level(ingot_nb2d(placed, idx, n));
+            int nbsum = ingot_nb2d(placed, idx, n);
+            int lvl = ingot_ctx_level(nbsum);
 #ifdef INGOT_BIT_STATS
             if (w && w->cap && k == last - 1) {
                 ingot_certain[0]++;
@@ -275,9 +276,17 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
                     (uint32_t)(z[k] < 0 ? -z[k] : z[k]), 1);
             else
 #endif
+#if INGOT_ZERO_CTX
+            ingot_rc_put_int_fromz(w,
+                &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))],
+                &probs[INGOT_PROB_ZERO
+                       + ingot_zero_ctx(k, n, plane, nbsum)],
+                z[k], (k == last - 1) ? 1 : 0);
+#else
             ingot_rc_put_int_from(w,
                 &probs[ingot_prob_of(ingot_ctx_index(k, n, plane, lvl))],
                 z[k], (k == last - 1) ? 1 : 0);
+#endif
             placed[idx] = z[k];
         }
     }
