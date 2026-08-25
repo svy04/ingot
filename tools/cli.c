@@ -128,6 +128,11 @@ static const char *g_dump_path;
 static void dump_at_exit(void) { if (g_dump_path) ingot_prob_dump(g_dump_path); }
 #endif
 
+#ifdef INGOT_COEF_DUMP
+void ingot_coef_dump(const char *path);
+static const char *g_coef_path;
+static void coef_at_exit(void) { if (g_coef_path) ingot_coef_dump(g_coef_path); }
+#endif
 #ifdef INGOT_BIT_STATS
 void ingot_bitstat_dump(const char *path);
 static const char *g_bs_path;
@@ -144,6 +149,11 @@ int main(int argc, char **argv)
 #ifdef INGOT_BIT_STATS
     g_bs_path = getenv("INGOT_BITSTAT_PATH");
     if (g_bs_path) atexit(bs_at_exit);
+#endif
+#ifdef INGOT_COEF_DUMP
+    { extern void ingot_coef_dump(const char *);
+      const char *cp = getenv("INGOT_COEF_PATH");
+      if (cp) { g_coef_path = cp; atexit(coef_at_exit); } }
 #endif
     if (argc < 2) { usage(); return 1; }
 

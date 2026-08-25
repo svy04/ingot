@@ -123,6 +123,20 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
     (void)lambda;      /* 부호 감추기도 꼬리 절단도 꺼 두면 안 쓴다 */
 #endif
     ingot_fdct(resid, n, coef, n, tx);
+#ifdef INGOT_COEF_DUMP
+    /* 계수 자리별 에너지를 크기·변환별로 모은다. 지그재그를 데이터로
+     * 다시 만들기 위한 것이다. */
+    {
+        extern double ingot_coef_e[6][4][64 * 64];
+        int szi = (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2
+                : (n == 32) ? 3 : (n == 64) ? 4 : 5;
+        int txi = tx & 3, kk;
+        for (kk = 0; kk < total; kk++) {
+            int a = coef[kk] < 0 ? -coef[kk] : coef[kk];
+            ingot_coef_e[szi][txi][kk] += (double)a;
+        }
+    }
+#endif
 
     for (k = 0; k < total; k++) {
         int idx = zz[k];

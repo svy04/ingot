@@ -539,8 +539,29 @@ extern const int16_t ingot_dct128[128][128];
 extern const uint16_t ingot_zz128[128 * 128];
 #endif
 
+#if INGOT_ZZ_MEAS
+extern const uint16_t ingot_zzm4[4 * 4];
+extern const uint16_t ingot_zzm8[8 * 8];
+extern const uint16_t ingot_zzm16[16 * 16];
+#if INGOT_BLK32
+extern const uint16_t ingot_zzm32[32 * 32];
+#endif
+#if INGOT_BLK64
+extern const uint16_t ingot_zzm64[64 * 64];
+#endif
+#endif
+
 const uint16_t *ingot_zigzag_of(int n)
 {
+#if INGOT_ZZ_MEAS
+#if INGOT_BLK64
+    if (n == 64) return ingot_zzm64;
+#endif
+#if INGOT_BLK32
+    if (n == 32) return ingot_zzm32;
+#endif
+    return (n == 4) ? ingot_zzm4 : (n == 8) ? ingot_zzm8 : ingot_zzm16;
+#endif
 #if INGOT_BLK64
     if (n == 64) return ingot_zz64;
 #endif

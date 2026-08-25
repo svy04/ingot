@@ -477,6 +477,13 @@ static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
 #define INGOT_IDTX 0
 #endif
 
+/* 훑는 순서를 계수 에너지 실측으로 바꿀지. 대각선 지그재그는 「저주파가
+ * 왼쪽 위에 몰린다」는 성질만 쓰는데, 실제로 재 보니 앞 25% 자리의 겹침이
+ * 75~86% 였다. 나머지는 어긋나 있다. 표는 src/zzmeas.c 에 있다. */
+#ifndef INGOT_ZZ_MEAS
+#define INGOT_ZZ_MEAS 0
+#endif
+
 /* 항등 변환의 눈금. 코사인 변환과 계수 크기를 맞춘다. 256 분모이고,
  * 크기마다 다른 것은 우리 정수 변환의 시프트가 크기마다 다르기 때문이다
  * (2026-08-24 에 잰 ingot_tx_gain256 의 역제곱근). */
