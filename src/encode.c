@@ -126,7 +126,9 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
 
     for (k = 0; k < total; k++) {
         int idx = zz[k];
-        int step = ingot_qstep_aq(base, idx, n, plane, aqm);
+        int step = (INGOT_IDTX && (tx & 4))
+                     ? ingot_qstep_flat(base, plane, aqm)
+                     : ingot_qstep_aq(base, idx, n, plane, aqm);
         int level = ingot_quantize(coef[idx], step);
         z[k] = (int16_t)level;
         if (level != 0) last = k + 1;
@@ -141,7 +143,9 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
         int k2;
         for (k2 = 0; k2 < last; k2++) {
             int idx = zz[k2];
-            int step = ingot_qstep_aq(base, idx, n, plane, aqm);
+            int step = (INGOT_IDTX && (tx & 4))
+                     ? ingot_qstep_flat(base, plane, aqm)
+                     : ingot_qstep_aq(base, idx, n, plane, aqm);
             int z0 = z[k2], nz;
             int64_t e0, e1, dd, saved;
             if (z0 == 0) continue;
@@ -176,7 +180,9 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
             for (nl = kk; nl > 0 && z[nl - 1] == 0; nl--) ;
             for (j = nl; j < last; j++) {
                 int jdx = zz[j];
-                int jstep = ingot_qstep_aq(base, jdx, n, plane, aqm);
+                int jstep = (INGOT_IDTX && (tx & 4))
+                      ? ingot_qstep_flat(base, plane, aqm)
+                      : ingot_qstep_aq(base, jdx, n, plane, aqm);
                 int64_t e0 = (int64_t)coef[jdx]
                            - ingot_dequantize(z[j], jstep);
                 int64_t e1 = (int64_t)coef[jdx];
@@ -210,7 +216,9 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
             int64_t bestcost = 0;
             for (j = 0; j < last; j++) {
                 int jdx = zz[j];
-                int jstep = ingot_qstep_aq(base, jdx, n, plane, aqm);
+                int jstep = (INGOT_IDTX && (tx & 4))
+                      ? ingot_qstep_flat(base, plane, aqm)
+                      : ingot_qstep_aq(base, jdx, n, plane, aqm);
                 int64_t e0 = (int64_t)coef[jdx] - ingot_dequantize(z[j], jstep);
                 int d;
                 for (d = -1; d <= 1; d += 2) {
@@ -293,7 +301,9 @@ static void code_residual(ingot_rc_enc *w, const int16_t *resid, int base, int n
 
     for (k = 0; k < total; k++) {
         int idx = zz[k];
-        int step = ingot_qstep_aq(base, idx, n, plane, aqm);
+        int step = (INGOT_IDTX && (tx & 4))
+                     ? ingot_qstep_flat(base, plane, aqm)
+                     : ingot_qstep_aq(base, idx, n, plane, aqm);
         int v = (k < last) ? ingot_dequantize(z[k], step) : 0;
         if (v >  32767) v =  32767;
         if (v < -32768) v = -32768;
@@ -492,6 +502,9 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
     int64_t best_cost = -1;
     int64_t rough[INGOT_PRED_COUNT];
     int order[INGOT_PRED_COUNT], t, ti, tries;
+#if INGOT_IDTX
+    int tx_try[INGOT_PRED_COUNT], tx_best = 0;
+#endif
 
     fetch_block(orig, pw, ph, bx, by, n, src);
     ingot_gather_neighbors(recon, pw, ph, bx, by, gx0, gy0, n, &nb);
@@ -511,6 +524,9 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
          * 답이 나온다(같은 확률 상태·같은 이웃에서 골랐다). */
         best = *mode_io;
         ingot_predict(&nb, best, best_pred);
+#if INGOT_IDTX
+        tx_best = 0;      /* 계획 재생에서는 변환을 다시 고르지 않는다 */
+#endif
         for (k = 0; k < total; k++)
             resid[k] = (int16_t)((int)src[k] - (int)best_pred[k]);
 #ifdef INGOT_BIT_STATS
@@ -584,6 +600,37 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         code_residual(&trial, resid, base, n, plane, trial_p, pred, out,
                       ingot_tx_of_mode(m), lambda, aqm, &try_empty);
         bits = (int64_t)trial.bits;
+#if INGOT_IDTX
+        /* 변환을 건너뛰는 쪽도 담아 본다. 모서리가 지나는 블록에서는
+         * 코사인 변환이 잔물결을 남기므로 그대로 담는 편이 쌀 수 있다.
+         * 고른 결과는 블록마다 한 비트로 신호한다. */
+        {
+            int16_t out2[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
+            ingot_rc_enc trial2;
+            int try_e2 = *pempty;
+            int64_t bits2, dist2, cost2, cost1;
+            memcpy(trial_p, probs, sizeof(trial_p));
+            ingot_rc_enc_init(&trial2, scratch, 0);
+            code_residual(&trial2, resid, base, n, plane, trial_p, pred, out2,
+                          ingot_tx_of_mode(m) | 4, lambda, aqm, &try_e2);
+            bits2 = (int64_t)trial2.bits
+                  + (int64_t)ingot_rc_price(probs[INGOT_PROB_TX
+                                                  + ingot_tx_ctx(n)], 1);
+            bits += (int64_t)ingot_rc_price(probs[INGOT_PROB_TX
+                                                  + ingot_tx_ctx(n)], 0);
+            dist2 = block_distortion_n(src, out2, total, n, bx, by);
+            cost2 = dist2 * INGOT_RD_SCALE + lambda * bits2;
+            cost1 = block_distortion_n(src, out, total, n, bx, by)
+                    * INGOT_RD_SCALE + lambda * bits;
+            if (cost2 < cost1) {
+                bits = bits2;
+                for (k = 0; k < total; k++) out[k] = out2[k];
+                tx_try[m] = 1;
+            } else {
+                tx_try[m] = 0;
+            }
+        }
+#endif
         /* 모드를 적는 값도 후보마다 다르다. 앞 블록과 같은 모드는 확률 모델이
          * 이미 그쪽으로 기울어 있어 싸고, 드문 모드는 비싸다. 이것을 고른 뒤
          * 상수로 더하면 후보 사이의 차이가 통째로 사라져, 모드 선택이 왜곡만
@@ -595,6 +642,9 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
         if (best_cost < 0 || cost < best_cost) {
             best_cost = cost;
             best = m;
+#if INGOT_IDTX
+            tx_best = tx_try[m];
+#endif
             for (k = 0; k < total; k++) best_pred[k] = pred[k];
         }
     }
@@ -614,8 +664,15 @@ static int64_t code_block(ingot_rc_enc *w, const uint8_t *orig, uint8_t *recon,
 #endif
         *pmode = best;
     }
+#if INGOT_IDTX
+    ingot_rc_enc_bit(w, &probs[INGOT_PROB_TX + ingot_tx_ctx(n)], tx_best);
+    code_residual(w, resid, base, n, plane, probs, best_pred, out,
+                  ingot_tx_of_mode(best) | (tx_best ? 4 : 0),
+                  lambda, aqm, pempty);
+#else
     code_residual(w, resid, base, n, plane, probs, best_pred, out,
                   ingot_tx_of_mode(best), lambda, aqm, pempty);
+#endif
     store_recon(recon, pw, ph, bx, by, n, out);
 #if INGOT_PLAN
     if (mode_io) *mode_io = best;

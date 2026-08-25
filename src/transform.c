@@ -600,6 +600,21 @@ static const int16_t *adst_of(int n)
 
 void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n, int tx)
 {
+#if INGOT_IDTX
+    if (tx & 4) {
+        /* 항등 변환. 잔차를 눈금만 맞춰 그대로 담는다. */
+        int k = ingot_idtx_k(n), y, x;
+        for (y = 0; y < n; y++)
+            for (x = 0; x < n; x++) {
+                int32_t v = ((int32_t)src[(size_t)y * stride + x] * k + 128)
+                            >> 8;
+                if (v >  32767) v =  32767;
+                if (v < -32768) v = -32768;
+                dst[y * n + x] = (int16_t)v;
+            }
+        return;
+    }
+#endif
     int32_t tmp[INGOT_MAX_BLOCK * INGOT_MAX_BLOCK];
     const int16_t *Mh = MAT_H(n, tx), *Mv = MAT_V(n, tx);
     int shift = (n == 4) ? INGOT_FWD_SHIFT4
@@ -638,6 +653,19 @@ void ingot_fdct(const int16_t *src, int stride, int16_t *dst, int n, int tx)
 
 void ingot_idct(const int16_t *src, int16_t *dst, int stride, int n, int tx)
 {
+#if INGOT_IDTX
+    if (tx & 4) {
+        int iv = ingot_idtx_inv(n), y, x;
+        for (y = 0; y < n; y++)
+            for (x = 0; x < n; x++) {
+                int64_t v = ((int64_t)src[y * n + x] * iv + 32768) >> 16;
+                if (v >  32767) v =  32767;
+                if (v < -32768) v = -32768;
+                dst[(size_t)y * stride + x] = (int16_t)v;
+            }
+        return;
+    }
+#endif
     /* 64비트로 모은다. 계수가 규격 상한(±32767)까지 찬 16x16 을 역변환하면
      * 둘째 단계 누산이 32비트 한계의 31.6 배까지 간다. 정상 이미지에서는
      * 안 닿지만 손상된 파일이 그 값을 실을 수 있고, 32비트로 두면 그때

@@ -457,6 +457,34 @@ static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
 #define INGOT_ADST 0
 #endif
 
+/* 변환을 아예 건너뛰는 선택을 둘지. 잔차를 그대로 담는다.
+ *
+ * 코사인 변환은 날카로운 모서리를 여러 계수로 흩뿌리고 그 자리에 잔물결을
+ * 남긴다. 모서리가 지나는 블록에서는 변환을 안 하는 편이 쌀 수 있다.
+ * 원문: 「identity transform(IDTX) means skipping transform coding in a
+ * certain direction so is particularly beneficial for coding sharp edges」
+ * (Valin 외, Extended Transform Kernels 절).
+ *
+ * 블록마다 한 비트를 신호한다 -- 모드에서 유도할 수 없다. */
+#ifndef INGOT_IDTX
+#define INGOT_IDTX 0
+#endif
+
+/* 항등 변환의 눈금. 코사인 변환과 계수 크기를 맞춘다. 256 분모이고,
+ * 크기마다 다른 것은 우리 정수 변환의 시프트가 크기마다 다르기 때문이다
+ * (2026-08-24 에 잰 ingot_tx_gain256 의 역제곱근). */
+static inline int ingot_idtx_k(int n)
+{
+    return (n == 4) ? 1014 : (n == 8) ? 1004 : (n == 16) ? 875
+         : (n == 32) ? 817 : 486;
+}
+
+static inline int ingot_idtx_inv(int n)
+{
+    return (n == 4) ? 16545 : (n == 8) ? 16710 : (n == 16) ? 19174
+         : (n == 32) ? 20535 : 34521;
+}
+
 /* 아래 한 비트가 세로, 둘째 비트가 가로에 사인 변환을 쓴다는 뜻이다.
  *
  * 잔차가 어느 방향으로 커지는지에 맞춘다. 위에서 내려오는 예측은 세로로,
@@ -903,6 +931,20 @@ static inline int ingot_aq_mul(const ingot_neighbors *nb)
 #endif
 }
 
+/* 항등 변환에서는 계수 자리가 주파수가 아니라 화소 자리다. 자리로 세기를
+ * 키우는 가중을 그대로 걸면 오른쪽 아래 화소만 거칠어진다. 평평하게 쓴다. */
+static inline int ingot_qstep_flat(int base, int plane, int aqm)
+{
+    int s = base;
+    if (plane) s = (s * INGOT_QW_CHROMA) >> 4;
+#if INGOT_AQ
+    s = (s * aqm) >> 4;
+#else
+    (void)aqm;
+#endif
+    return s < 1 ? 1 : s;
+}
+
 static inline int ingot_qstep_aq(int base, int idx, int n, int plane, int aqm)
 {
     int s = ingot_qstep_at(base, idx, n, plane);
@@ -1246,7 +1288,14 @@ static inline int ingot_zero_level(int nb)
 }
 /* 「0 인가」 전용 무리는 계수 무리 배열 뒤에 붙인다. */
 #define INGOT_PROB_ZERO    (INGOT_CTX_COUNT * INGOT_PROB_PER_CTX)
-#define INGOT_PROB_SPLIT   (INGOT_PROB_ZERO + INGOT_ZERO_COUNT)
+/* 변환 종류 깃발. 크기마다 한 칸이다. */
+#if INGOT_IDTX
+#define INGOT_TX_LEVELS 6
+#else
+#define INGOT_TX_LEVELS 0
+#endif
+#define INGOT_PROB_TX      (INGOT_PROB_ZERO + INGOT_ZERO_COUNT)
+#define INGOT_PROB_SPLIT   (INGOT_PROB_TX + INGOT_TX_LEVELS)
 #if INGOT_BLK128
 #define INGOT_SPLIT_LEVELS 5     /* 128->64, 64->32, 32->16, 16->8, 8->4 */
 #elif INGOT_BLK64
@@ -1540,6 +1589,15 @@ static inline int ingot_zero_ctx(int k, int n, int plane, int nb)
     return ((sz * INGOT_BANDS + band) * INGOT_ZERO_NBLEV + lvl)
          + (plane ? (INGOT_ZERO_COUNT / 2) : 0);
 }
+
+#if INGOT_IDTX
+/* 변환 깃발의 무리 번호. 블록 크기로 가른다. */
+static inline int ingot_tx_ctx(int n)
+{
+    return (n == 4) ? 0 : (n == 8) ? 1 : (n == 16) ? 2
+         : (n == 32) ? 3 : (n == 64) ? 4 : 5;
+}
+#endif
 
 static inline int ingot_prob_of(int ctx)
 {

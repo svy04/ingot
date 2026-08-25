@@ -257,9 +257,20 @@ static int read_block(ingot_rc_dec *r, uint8_t *plane, int pw, int ph,
 
     ingot_predict(&nb, (int)mode, pred);
 
+#if INGOT_IDTX
+    {
+        int txf = ingot_rc_dec_bit(r, &probs[INGOT_PROB_TX + ingot_tx_ctx(n)]);
+        if (r->error) return 1;
+        if (read_residual(r, base, n, p, probs, back,
+                          ingot_tx_of_mode((int)mode) | (txf ? 4 : 0),
+                          ingot_aq_mul(&nb), pempty))
+            return 1;
+    }
+#else
     if (read_residual(r, base, n, p, probs, back,
                       ingot_tx_of_mode((int)mode), ingot_aq_mul(&nb), pempty))
         return 1;
+#endif
 
     for (k = 0; k < total; k++)
         out[k] = (int16_t)ingot_clamp_u8((int)pred[k] + (int)back[k]);
