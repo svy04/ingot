@@ -457,6 +457,13 @@ static const short ingot_angle_tab[INGOT_ANGLE_N][2] = {
 #define INGOT_ADST 0
 #endif
 
+/* 사인 변환을 세로·가로 양쪽에 함께 걸지. 우리 지그재그와 자리 가중은
+ * 코사인 변환의 주파수 배열을 전제하는데, 양쪽에 걸면 두 축이 다 어긋난다.
+ * 한쪽만 거는 판을 따로 잰다. */
+#ifndef INGOT_ADST_BOTH
+#define INGOT_ADST_BOTH 1
+#endif
+
 /* 변환을 아예 건너뛰는 선택을 둘지. 잔차를 그대로 담는다.
  *
  * 코사인 변환은 날카로운 모서리를 여러 계수로 흩뿌리고 그 자리에 잔물결을
@@ -495,18 +502,26 @@ static inline int ingot_tx_of_mode(int mode)
 #if INGOT_MODES8
     if (mode == INGOT_PRED_V) return 1;
     if (mode == INGOT_PRED_H) return 2;
+#if INGOT_ADST_BOTH
     if (mode == INGOT_PRED_PLANE) return 3;
+#else
+    if (mode == INGOT_PRED_PLANE) return 0;
+#endif
     if (mode >= INGOT_PRED_D45) {
         /* 각도마다 잔차가 커지는 방향이 다르다. 기울기가 양수면 위 행만
          * 보므로 세로로 멀어지고, 음수면서 완만하면(|기울기| 가 크면)
-         * 왼쪽 열 쪽이라 가로로 멀어진다. 그 사이는 양쪽이다. */
+         * 왼쪽 열 쪽이라 가로로 멀어진다. */
         int a = mode - INGOT_PRED_D45;
         int dx;
         if (a >= INGOT_ANGLE_N) a = INGOT_ANGLE_N - 1;
         dx = ingot_angle_tab[a][0];
         if (dx > 0) return 1;            /* 위 행만 → 세로 */
         if (dx <= -96) return 2;         /* 거의 가로 → 가로 */
+#if INGOT_ADST_BOTH
         return 3;                        /* 그 사이 → 양쪽 */
+#else
+        return 0;                        /* 양쪽에 거는 것은 따로 잰다 */
+#endif
     }
     return 0;                            /* DC */
 #else
